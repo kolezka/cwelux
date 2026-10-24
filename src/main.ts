@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createTauriBridge } from "./api";
 import { createApp, renderUnavailable } from "./app";
+import { decodePreferences } from "./preferences";
 import { createActivityTracker } from "./state";
 import "./styles.css";
 
@@ -27,6 +28,15 @@ if (!isTauri()) {
     }
     activity.setNativeVisible(event.payload);
   }).catch((error) => console.error("Could not listen for popover-visibility:", error));
+
+  // Sent by the native side only after preferences were written successfully.
+  void listen<unknown>("preferences-changed", (event) => {
+    try {
+      app.applyPreferences(decodePreferences(event.payload, "preferences-changed payload"));
+    } catch (error) {
+      console.error("Ignoring malformed preferences-changed event:", error);
+    }
+  }).catch((error) => console.error("Could not listen for preferences-changed:", error));
 
   document.addEventListener("visibilitychange", () => activity.setPageVisible(document.visibilityState === "visible"));
   window.addEventListener("focus", () => activity.setFocused(true));

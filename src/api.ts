@@ -7,6 +7,7 @@ import {
   type Session,
   type SessionDetails,
 } from "./types";
+import { decodeBoolean, decodeChosenDirectory, decodePreferences, type Preferences } from "./preferences";
 
 export type InvokeFn = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -21,7 +22,20 @@ export interface TmuxBridge {
   openSession(sessionId: string): Promise<void>;
   attachCommand(sessionId: string): Promise<string>;
   hidePopover(): Promise<void>;
+  getPreferences(): Promise<Preferences>;
+  openSettings(): Promise<void>;
 }
+
+/** The settings window's bridge. It has no tmux session commands. */
+export interface SettingsBridge {
+  getPreferences(): Promise<Preferences>;
+  savePreferences(preferences: Preferences): Promise<Preferences>;
+  chooseDirectory(): Promise<string | null>;
+  getLaunchAtLogin(): Promise<boolean>;
+  setLaunchAtLogin(enabled: boolean): Promise<boolean>;
+}
+
+const getPreferences = (invoke: InvokeFn) => async () => decodePreferences(await invoke("get_preferences"));
 
 /** Wraps Tauri invoke and checks every response against the contract. Backend errors pass through. */
 export function createTauriBridge(invoke: InvokeFn): TmuxBridge {
@@ -39,5 +53,19 @@ export function createTauriBridge(invoke: InvokeFn): TmuxBridge {
     attachCommand: async (sessionId) =>
       decodeText(await invoke("attach_command", { sessionId }), "attach command", false),
     hidePopover: async () => decodeVoid(await invoke("hide_popover"), "hide_popover"),
+    getPreferences: getPreferences(invoke),
+    openSettings: async () => decodeVoid(await invoke("open_settings"), "open_settings"),
+  };
+}
+
+export function createSettingsBridge(invoke: InvokeFn): SettingsBridge {
+  return {
+    getPreferences: getPreferences(invoke),
+    savePreferences: async (preferences) =>
+      decodePreferences(await invoke("save_preferences", { preferences }), "saved preferences"),
+    chooseDirectory: async () => decodeChosenDirectory(await invoke("choose_directory")),
+    getLaunchAtLogin: async () => decodeBoolean(await invoke("get_launch_at_login"), "launch at login state"),
+    setLaunchAtLogin: async (enabled) =>
+      decodeBoolean(await invoke("set_launch_at_login", { enabled }), "launch at login state"),
   };
 }

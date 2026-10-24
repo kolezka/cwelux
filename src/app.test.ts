@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createTauriBridge, type TmuxBridge } from "./api";
 import { createApp, renderUnavailable, type AppHandle } from "./app";
+import { DEFAULT_PREFERENCES, type Preferences } from "./preferences";
 import type { Session, SessionDetails } from "./types";
 
 type Method = keyof TmuxBridge;
@@ -56,6 +57,7 @@ class FakeBridge implements TmuxBridge {
   calls: Array<{ method: Method; args: unknown[] }> = [];
   sessions: Session[] = [session("$1", "website", { attached: 1 }), session("$2", "api")];
   handlers: Partial<Record<Method, (...args: any[]) => Promise<any>>> = {};
+  preferences: Preferences = { ...DEFAULT_PREFERENCES };
 
   private call<T>(method: Method, args: unknown[], fallback: () => T): Promise<T> {
     this.calls.push({ method, args });
@@ -105,19 +107,30 @@ class FakeBridge implements TmuxBridge {
   hidePopover() {
     return this.call("hidePopover", [], () => undefined);
   }
+  getPreferences() {
+    return this.call("getPreferences", [], () => ({ ...this.preferences }));
+  }
+  openSettings() {
+    return this.call("openSettings", [], () => undefined);
+  }
 }
 
 class FakeTimers {
   active = new Map<number, () => void>();
+  delays = new Map<number, number>();
   private nextId = 1;
-  setInterval = (fn: () => void, _ms: number) => {
+  setInterval = (fn: () => void, ms: number) => {
     const id = this.nextId++;
     this.active.set(id, fn);
+    this.delays.set(id, ms);
     return id;
   };
   clearInterval = (id: unknown) => {
     this.active.delete(id as number);
   };
+  activeDelays() {
+    return [...this.active.keys()].map((id) => this.delays.get(id));
+  }
   tick() {
     for (const fn of [...this.active.values()]) fn();
   }
@@ -693,5 +706,125 @@ describe("without Tauri", () => {
     renderUnavailable(root);
     expect(root.textContent).toMatch(/desktop app/i);
     expect(root.querySelector("#session-list")).toBeNull();
+  });
+});
+
+describe("settings entry point", () => {
+  test("the footer Settings action works from the list, details and create views", async () => {
+    await mount();
+    const footer = $("#open-settings");
+    expect(footer.closest("[hidden]")).toBeNull();
+    footer.click();
+    await openSession("$1");
+    expect(visibleView()).toBe("detail");
+    expect($("#open-settings").closest("[hidden]")).toBeNull();
+    $("#open-settings").click();
+    $("#back").click();
+    $("#new-session").click();
+    expect(visibleView()).toBe("create");
+    expect($("#open-settings").closest("[hidden]")).toBeNull();
+    $("#open-settings").click();
+    await flush();
+    expect(bridge.count("openSettings")).toBe(3);
+  });
+
+  test("a failure to open settings is shown, not swallowed", async () => {
+    bridge.handlers.openSettings = async () => {
+      throw "Could not open settings: no display";
+    };
+    await mount();
+    $("#open-settings").click();
+    await flush();
+    expect($("#footer-error").textContent).toContain("no display");
+  });
+});
+
+describe("preferences in the popover", () => {
+  const prefs = (extra: Partial<Preferences>): Preferences => ({ ...DEFAULT_PREFERENCES, ...extra });
+
+  test("polls at the saved interval and switches without overlapping timers", async () => {
+    bridge.preferences = prefs({ refreshIntervalSeconds: 10 });
+    await mount();
+    app.setActive(true);
+    await flush();
+    expect(timers.activeDelays()).toEqual([10_000]);
+    app.applyPreferences(prefs({ refreshIntervalSeconds: 2 }));
+    expect(timers.activeDelays()).toEqual([2_000]);
+    app.setActive(false);
+    app.applyPreferences(prefs({ refreshIntervalSeconds: 4 }));
+    expect(timers.activeDelays()).toEqual([]);
+    app.setActive(true);
+    await flush();
+    expect(timers.activeDelays()).toEqual([4_000]);
+  });
+
+  test("applies the theme live and returns to system", async () => {
+    await mount();
+    app.applyPreferences(prefs({ theme: "dark" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    app.applyPreferences(prefs({ theme: "light" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    app.applyPreferences(prefs({ theme: "system" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+
+  test("new sessions start in the saved default directory", async () => {
+    bridge.preferences = prefs({ defaultDirectory: "~/code" });
+    await mount();
+    $("#new-session").click();
+    expect($<HTMLInputElement>("#new-directory").value).toBe("~/code");
+    type("#new-name", "proj");
+    submit("#create-form");
+    await flush();
+    expect(bridge.calls.find((c) => c.method === "createSession")?.args).toEqual(["proj", "~/code"]);
+  });
+
+  test("a preferences change does not replace a create form in progress", async () => {
+    await mount();
+    $("#new-session").click();
+    type("#new-directory", "/tmp/mine");
+    app.applyPreferences(prefs({ defaultDirectory: "~/other" }));
+    expect($<HTMLInputElement>("#new-directory").value).toBe("/tmp/mine");
+    $("#back-create").click();
+    $("#new-session").click();
+    expect($<HTMLInputElement>("#new-directory").value).toBe("~/other");
+  });
+
+  test("a preferences load failure is visible and falls back to defaults", async () => {
+    bridge.handlers.getPreferences = async () => {
+      throw "Settings file /x/preferences.json is malformed (EOF). Fix or remove it.";
+    };
+    await mount();
+    expect($("#footer-error").textContent).toContain("Could not load settings");
+    expect($("#footer-error").textContent).toContain("malformed");
+    $("#new-session").click();
+    expect($<HTMLInputElement>("#new-directory").value).toBe("~");
+    // The interval stays at what the app started with (1000 ms in this harness).
+    app.setActive(true);
+    expect(timers.activeDelays()).toEqual([1_000]);
+  });
+
+  test("a change event that arrives first wins over a late initial load", async () => {
+    const slow = deferred<Preferences>();
+    bridge.handlers.getPreferences = () => slow.promise;
+    app = createApp({ root, bridge, timers, copyText: async () => {} });
+    void app.start();
+    await flush();
+    app.applyPreferences(prefs({ theme: "dark", defaultDirectory: "~/new" }));
+    slow.resolve(prefs({ theme: "light", defaultDirectory: "~/old" }));
+    await flush();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    $("#new-session").click();
+    expect($<HTMLInputElement>("#new-directory").value).toBe("~/new");
+  });
+
+  test("a successful change clears an earlier load error", async () => {
+    bridge.handlers.getPreferences = async () => {
+      throw "boom";
+    };
+    await mount();
+    expect($("#footer-error").textContent).toContain("boom");
+    app.applyPreferences(prefs({}));
+    expect($("#footer-error").textContent).toBe("");
   });
 });

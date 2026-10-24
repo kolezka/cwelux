@@ -12,5 +12,9 @@ export default defineConfig({
     outDir: "dist",
     target: "safari15",
     emptyOutDir: true,
+    // The popover and the settings window are separate pages.
+    rolldownOptions: {
+      input: { main: "index.html", settings: "settings.html" },
+    },
   },
 });

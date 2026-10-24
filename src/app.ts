@@ -1,4 +1,5 @@
 import type { TmuxBridge } from "./api";
+import { applyTheme, DEFAULT_PREFERENCES, type Preferences } from "./preferences";
 import {
   createEpoch,
   createSerialRunner,
@@ -31,6 +32,8 @@ export interface AppHandle {
   refresh(): Promise<void>;
   /** Polling runs only while the popover is visible and focused. */
   setActive(active: boolean): void;
+  /** Applies saved preferences: theme, polling interval, default directory. */
+  applyPreferences(preferences: Preferences): void;
 }
 
 type View = "list" | "detail" | "create";
@@ -39,7 +42,7 @@ type Mutation = "create" | "rename" | "kill" | "open" | "attach";
 
 type Child = Node | string;
 
-function builder(doc: Document) {
+export function builder(doc: Document) {
   return function el<K extends keyof HTMLElementTagNameMap>(
     tag: K,
     props: Record<string, string | boolean> = {},
@@ -89,7 +92,10 @@ export function createApp(options: AppOptions): AppHandle {
     setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
     clearInterval: (handle) => globalThis.clearInterval(handle as ReturnType<typeof setInterval>),
   };
-  const pollIntervalMs = options.pollIntervalMs ?? 4000;
+  let pollIntervalMs = options.pollIntervalMs ?? DEFAULT_PREFERENCES.refreshIntervalSeconds * 1000;
+  let defaultDirectory = DEFAULT_PREFERENCES.defaultDirectory;
+  // Bumped by every applied change, so a slow initial load cannot undo a newer one.
+  let preferencesVersion = 0;
   const copyText = options.copyText ?? ((text: string) => navigator.clipboard.writeText(text));
   const el = builder(root.ownerDocument);
 
@@ -124,6 +130,14 @@ export function createApp(options: AppOptions): AppHandle {
   const sessionList = el("div", { id: "session-list" });
   const newSession = el("button", { id: "new-session", class: "primary wide", type: "button", text: "+ New session" });
 
+  const openSettings = el("button", { class: "quiet", id: "open-settings", type: "button", text: "Settings" });
+  const footerError = el("p", { class: "error footer-error", id: "footer-error", role: "alert" });
+  const footer = el("footer", { class: "footer" },
+    el("div", { class: "footer-row" },
+      el("span", { text: "Sessions keep running when you close this menu." }),
+      openSettings),
+    footerError);
+
   const listView = el(
     "section",
     { "data-view": "list" },
@@ -134,9 +148,6 @@ export function createApp(options: AppOptions): AppHandle {
       search,
       el("div", { class: "section-label" }, el("span", { text: "ON THIS MAC" }), updated),
       listState, retry, sessionList, newSession),
-    el("footer", { class: "footer" },
-      el("span", { text: "Sessions keep running when you close this menu." }),
-      el("span", { class: "mono", text: "tmux" })),
   );
 
   const back = el("button", { class: "icon", id: "back", type: "button", "aria-label": "Back to sessions", text: "‹" });
@@ -196,8 +207,8 @@ export function createApp(options: AppOptions): AppHandle {
 
   const backCreate = el("button", { class: "icon", id: "back-create", type: "button", "aria-label": "Back to sessions", text: "‹" });
   const newName = el("input", { id: "new-name", placeholder: "my-project", maxlength: "64", autocomplete: "off", spellcheck: "false" });
-  const newDirectory = el("input", { id: "new-directory", value: "~", autocomplete: "off", spellcheck: "false" });
-  newDirectory.value = "~";
+  const newDirectory = el("input", { id: "new-directory", autocomplete: "off", spellcheck: "false" });
+  newDirectory.value = defaultDirectory;
   const createError = el("p", { class: "error", id: "create-error", role: "alert" });
   const createSubmit = el("button", { class: "primary wide", id: "create-submit", type: "submit", text: "Create session" });
   const createForm = el("form", { class: "body", id: "create-form", novalidate: true },
@@ -478,6 +489,8 @@ export function createApp(options: AppOptions): AppHandle {
   });
   newSession.addEventListener("click", () => {
     createError.textContent = "";
+    // A fresh form starts in the saved directory. Changes while it is open leave it alone.
+    newDirectory.value = defaultDirectory;
     showView("create");
     newName.focus();
   });
@@ -610,6 +623,43 @@ export function createApp(options: AppOptions): AppHandle {
     await runner.request();
   });
 
+  openSettings.addEventListener("click", () => {
+    footerError.textContent = "";
+    bridge.openSettings().catch((error) => {
+      footerError.textContent = `Could not open settings: ${errorMessage(error)}`;
+    });
+  });
+
+  function startPolling() {
+    pollHandle = timers.setInterval(() => void runner.requestIfIdle(), pollIntervalMs);
+  }
+
+  function applyPreferences(next: Preferences) {
+    preferencesVersion++;
+    footerError.textContent = "";
+    applyTheme(root.ownerDocument, next.theme);
+    defaultDirectory = next.defaultDirectory;
+    if (view !== "create") newDirectory.value = defaultDirectory;
+    const nextMs = next.refreshIntervalSeconds * 1000;
+    if (nextMs !== pollIntervalMs) {
+      pollIntervalMs = nextMs;
+      if (pollHandle !== null) {
+        timers.clearInterval(pollHandle);
+        startPolling();
+      }
+    }
+  }
+
+  async function loadPreferences() {
+    const version = preferencesVersion;
+    try {
+      const loaded = await bridge.getPreferences();
+      if (version === preferencesVersion) applyPreferences(loaded);
+    } catch (error) {
+      if (version === preferencesVersion) footerError.textContent = `Could not load settings: ${errorMessage(error)}`;
+    }
+  }
+
   root.ownerDocument.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     bridge.hidePopover().catch((error) => console.error("hide_popover failed:", errorMessage(error)));
@@ -618,20 +668,21 @@ export function createApp(options: AppOptions): AppHandle {
   // ---- Public handle ----
   return {
     async start() {
-      root.replaceChildren(listView, detailView, createView);
+      root.replaceChildren(listView, detailView, createView, footer);
       showView("list");
       renderList();
-      await runner.request();
+      await Promise.all([loadPreferences(), runner.request()]);
     },
     refresh: () => runner.request(),
     setActive(active) {
       if (active && pollHandle === null) {
-        pollHandle = timers.setInterval(() => void runner.requestIfIdle(), pollIntervalMs);
+        startPolling();
         void runner.requestIfIdle();
       } else if (!active && pollHandle !== null) {
         timers.clearInterval(pollHandle);
         pollHandle = null;
       }
     },
+    applyPreferences,
   };
 }

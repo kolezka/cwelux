@@ -8,6 +8,12 @@ const COMMANDS: &[&str] = &[
     "open_session",
     "attach_command",
     "hide_popover",
+    "get_preferences",
+    "save_preferences",
+    "open_settings",
+    "choose_directory",
+    "get_launch_at_login",
+    "set_launch_at_login",
 ];
 
 fn main() {

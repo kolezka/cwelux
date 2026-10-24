@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Settings window: preferences and launch at login only. No tmux session commands, no general file or shell access.",
+  "local": true,
+  "windows": ["settings"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-preferences",
+    "allow-save-preferences",
+    "allow-choose-directory",
+    "allow-get-launch-at-login",
+    "allow-set-launch-at-login"
+  ]
+}
