@@ -1,0 +1,20 @@
+[package]
+name = "cwelux"
+version = "0.1.0"
+description = "Menu-bar app for local tmux sessions"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+[lib]
+name = "cwelux_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.10", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"

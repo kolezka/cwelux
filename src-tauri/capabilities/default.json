@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Narrow bridge for the local popover window only.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-list-sessions",
+    "allow-session-details",
+    "allow-capture-pane",
+    "allow-create-session",
+    "allow-rename-session",
+    "allow-kill-session",
+    "allow-open-session",
+    "allow-attach-command",
+    "allow-hide-popover"
+  ]
+}
