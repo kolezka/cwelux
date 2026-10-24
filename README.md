@@ -11,8 +11,24 @@ Cwelux handles the routine commands while your terminal stays available for inte
 - **Preview output:** read the last 200 lines of a pane without attaching to it.
 - **Manage sessions:** create a detached session, rename it, or end it after confirmation.
 - **Return to the terminal:** open a session in the default terminal handler or copy its attach command.
+- **Settings:** a separate window, opened from the tray menu or the popover footer.
 
 Ending a session stops all processes in its panes. Cwelux asks for confirmation first.
+
+## Settings
+
+Open Settings from the tray icon's right-click menu or the **Settings** button at the bottom of the popover. The window opens in the centre of the screen.
+
+| Setting | Options | Default |
+| --- | --- | --- |
+| Launch at login | On or off | Off |
+| Default starting directory | Any existing folder, with a folder picker | Home folder (`~`) |
+| Refresh interval | 2, 4 or 10 seconds | 4 seconds |
+| Theme | Match system, light or dark | Match system |
+
+Preferences are saved to `preferences.json` in the app's config folder and survive restarts. Refresh interval and theme apply to the running app straight away. Launch at login applies as soon as you toggle it and is not part of **Save**.
+
+While Settings is open, the popover does not hide when it loses focus, so you can use both side by side. The tray icon and Escape still close it. For launch at login, move the app to a stable location such as `/Applications` first.
 
 ## Requirements
 
@@ -41,7 +57,7 @@ bun run tauri build --bundles app
 open src-tauri/target/release/bundle/macos/Cwelux.app
 ```
 
-The app runs in the menu bar, not the Dock. Left-click its icon to toggle the popover. Right-click for Quit.
+The app runs in the menu bar, not the Dock. Left-click its icon to toggle the popover. Right-click for Settings and Quit.
 
 This produces a local app bundle. It is not a signed or notarized distribution release.
 
@@ -68,6 +84,7 @@ Set these before launching the app:
 | --- | --- |
 | `CWELUX_TMUX_PATH` | Absolute path to the tmux executable. Otherwise Cwelux searches PATH and standard Homebrew locations. |
 | `CWELUX_TMUX_SOCKET` | Absolute socket path, passed to tmux as `-S`. Leave unset to use the normal local server. |
+| `CWELUX_CONFIG_DIR` | Absolute folder for `preferences.json`, useful for testing. It does not affect launch at login. |
 
 For example, to work with an explicitly selected test server:
 
