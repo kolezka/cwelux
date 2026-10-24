@@ -241,6 +241,8 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
         || {
             let state = app.state::<PopoverState>();
             let _opening = state.settings_opening.begin();
+            // The popover floats above normal windows; drop that so it cannot cover settings.
+            set_popover_floating(app, false);
             WebviewWindowBuilder::new(
                 app,
                 SETTINGS_WINDOW,
@@ -260,14 +262,28 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
                     if matches!(event, WindowEvent::Destroyed) {
                         // Runs after the window is unregistered, so the guard sees it closed.
                         let app = app.clone();
-                        tauri::async_runtime::spawn(async move { hide_if_unfocused(&app) });
+                        tauri::async_runtime::spawn(async move {
+                            set_popover_floating(&app, true);
+                            hide_if_unfocused(&app);
+                        });
                     }
                 });
             })
-            .map_err(|e| format!("Could not open settings: {e}"))
+            .map_err(|e| {
+                set_popover_floating(app, true);
+                format!("Could not open settings: {e}")
+            })
         },
     )
     .map(drop)
+}
+
+fn set_popover_floating(app: &AppHandle, floating: bool) {
+    if let Some(popover) = app.get_webview_window(WINDOW) {
+        if let Err(e) = popover.set_always_on_top(floating) {
+            eprintln!("cwelux: could not change popover level: {e}");
+        }
+    }
 }
 
 /// After settings close, a popover that lost focus meanwhile hides as it normally would.

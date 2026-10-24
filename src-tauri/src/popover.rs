@@ -40,10 +40,10 @@ pub enum HideReason {
     TrayToggle,
 }
 
-/// Every hide path asks this first. While the settings window exists, or is being
-/// created, the popover stays put.
-pub fn hide_allowed(_reason: HideReason, settings_open: bool) -> bool {
-    !settings_open
+/// Every hide path asks this first. While settings are open, only automatic hiding on
+/// focus loss is blocked; the tray icon, Escape and close still work.
+pub fn hide_allowed(reason: HideReason, settings_open: bool) -> bool {
+    !(settings_open && reason == HideReason::FocusLost)
 }
 
 /// Counts settings windows being created, so focus moving to a window that is not
@@ -95,13 +95,23 @@ mod tests {
     ];
 
     #[test]
-    fn every_hide_path_is_blocked_while_settings_are_open() {
+    fn settings_only_block_automatic_hiding() {
         for reason in REASONS {
             assert!(
                 hide_allowed(reason, false),
                 "{reason:?} with settings closed"
             );
-            assert!(!hide_allowed(reason, true), "{reason:?} with settings open");
+        }
+        assert!(!hide_allowed(HideReason::FocusLost, true));
+        for reason in [
+            HideReason::Escape,
+            HideReason::CloseRequested,
+            HideReason::TrayToggle,
+        ] {
+            assert!(
+                hide_allowed(reason, true),
+                "{reason:?} must still close the popover with settings open"
+            );
         }
     }
 
