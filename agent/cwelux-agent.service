@@ -1,0 +1,10 @@
+[Unit]
+Description=Cwelux agent: serves this user's tmux sessions to Cwelux
+
+[Service]
+ExecStart=%h/.local/bin/cwelux-agent --token-file %h/.config/cwelux-agent/token
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
