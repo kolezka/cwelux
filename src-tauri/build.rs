@@ -14,6 +14,7 @@ const COMMANDS: &[&str] = &[
     "choose_directory",
     "get_launch_at_login",
     "set_launch_at_login",
+    "list_remote_hosts",
 ];
 
 fn main() {

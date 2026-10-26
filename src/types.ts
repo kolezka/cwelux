@@ -130,3 +130,44 @@ export function decodeText(value: unknown, what: string, allowEmpty = true): str
 export function decodeVoid(value: unknown, what: string): void {
   if (value !== null && value !== undefined) throw new BridgeDataError(`${what} returned an unexpected value`);
 }
+
+export interface RemoteHostStatus {
+  name: string;
+  url: string;
+  state: "online" | "offline";
+  error: string | null;
+  reportedHost: string | null;
+  /** Unix time in seconds, from the agent. */
+  capturedAt: number | null;
+  sessions: Session[];
+}
+
+function nullable<T>(obj: Fields, key: string, what: string, read: (o: Fields, k: string, w: string) => T): T | null {
+  if (!(key in obj)) throw new BridgeDataError(`${what}.${key} is missing`);
+  return obj[key] === null ? null : read(obj, key, what);
+}
+
+function decodeRemoteHost(value: unknown, what: string): RemoteHostStatus {
+  const o = record(value, what);
+  const state = o.state;
+  if (state !== "online" && state !== "offline") throw new BridgeDataError(`${what}.state is not online or offline`);
+  const host: RemoteHostStatus = {
+    name: str(o, "name", what),
+    url: str(o, "url", what),
+    state,
+    error: nullable(o, "error", what, str),
+    reportedHost: nullable(o, "reportedHost", what, str),
+    capturedAt: nullable(o, "capturedAt", what, count),
+    sessions: array(o.sessions, `${what}.sessions`).map((s, i) => decodeSession(s, `${what} session ${i}`)),
+  };
+  if (host.name === "") throw new BridgeDataError(`${what}.name is empty`);
+  if (state === "offline" && (host.error === null || host.sessions.length > 0)) {
+    throw new BridgeDataError(`${what} is offline without a reason or with sessions`);
+  }
+  if (state === "online" && host.error !== null) throw new BridgeDataError(`${what} is online with an error`);
+  return host;
+}
+
+export function decodeRemoteHosts(value: unknown): RemoteHostStatus[] {
+  return array(value, "remote host list").map((item, i) => decodeRemoteHost(item, `remote host ${i}`));
+}

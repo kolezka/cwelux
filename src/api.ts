@@ -1,9 +1,11 @@
 import {
   decodeDetails,
+  decodeRemoteHosts,
   decodeSession,
   decodeSessions,
   decodeText,
   decodeVoid,
+  type RemoteHostStatus,
   type Session,
   type SessionDetails,
 } from "./types";
@@ -24,6 +26,7 @@ export interface TmuxBridge {
   hidePopover(): Promise<void>;
   getPreferences(): Promise<Preferences>;
   openSettings(): Promise<void>;
+  listRemoteHosts(): Promise<RemoteHostStatus[]>;
 }
 
 /** The settings window's bridge. It has no tmux session commands. */
@@ -55,6 +58,7 @@ export function createTauriBridge(invoke: InvokeFn): TmuxBridge {
     hidePopover: async () => decodeVoid(await invoke("hide_popover"), "hide_popover"),
     getPreferences: getPreferences(invoke),
     openSettings: async () => decodeVoid(await invoke("open_settings"), "open_settings"),
+    listRemoteHosts: async () => decodeRemoteHosts(await invoke("list_remote_hosts")),
   };
 }
 
