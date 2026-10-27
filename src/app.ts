@@ -159,7 +159,7 @@ export function createApp(options: AppOptions): AppHandle {
   const directory = el("dd", { id: "directory" });
   const windowCount = el("span", { id: "window-count" });
   const windowTabs = el("div", { class: "tabs", id: "window-tabs", role: "tablist", "aria-label": "Session windows" });
-  const panes = el("div", { id: "panes", "aria-label": "Panes" });
+  const panes = el("div", { class: "group", id: "panes", "aria-label": "Panes" });
   const output = el("pre", { class: "output", id: "output", "aria-label": "Pane output preview" });
   const outputState = el("p", { class: "notice", id: "output-state", role: "status" });
   const openTerminal = el("button", { class: "primary", id: "open-terminal", type: "button", text: "Open in terminal ↗" });
@@ -260,18 +260,18 @@ export function createApp(options: AppOptions): AppHandle {
     listState.classList.toggle("is-error", state === "error" || state === "missing-tmux");
 
     const visible = sessions ? filterSessions(sessions, search.value) : [];
-    sessionList.replaceChildren(
-      ...visible.map((s) =>
-        el("button", { class: "session", type: "button", "data-session-id": s.id },
-          el("span", { class: "session-icon", text: ">_", "aria-hidden": "true" }),
-          el("span", { class: "session-copy" },
-            el("span", { class: "session-name", text: s.name }),
-            el("span", {
-              class: "session-meta",
-              text: `${plural(s.windows, "window")} · ${s.attached ? `${plural(s.attached, "client")} attached` : "Detached"}`,
-            })),
-          el("span", { class: "arrow", text: "›", "aria-hidden": "true" }))),
-    );
+    const rows = visible.map((s) =>
+      el("button", { class: "session", type: "button", "data-session-id": s.id },
+        el("span", { class: "session-icon", text: ">_", "aria-hidden": "true" }),
+        el("span", { class: "session-copy" },
+          el("span", { class: "session-name", text: s.name }),
+          el("span", {
+            class: "session-meta",
+            text: `${plural(s.windows, "window")} · ${s.attached ? `${plural(s.attached, "client")} attached` : "Detached"}`,
+          })),
+        ...(s.attached > 0 ? [el("span", { class: "dot", "aria-hidden": "true" })] : []),
+        el("span", { class: "arrow", text: "›", "aria-hidden": "true" })));
+    sessionList.replaceChildren(...(rows.length ? [el("div", { class: "group" }, ...rows)] : []));
   }
 
   function selectedSession(): Session | null {

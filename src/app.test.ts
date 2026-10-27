@@ -204,6 +204,26 @@ describe("session list", () => {
     expect(meta).toEqual(["2 windows · 1 client attached", "2 windows · Detached"]);
   });
 
+  test("session rows live inside one grouped card", async () => {
+    await mount();
+    const group = root.querySelector("#session-list .group");
+    expect(group).not.toBeNull();
+    expect(group!.querySelectorAll(".session").length).toBe(bridge.sessions.length);
+  });
+
+  test("an attached session shows a status dot, a detached one does not", async () => {
+    bridge.sessions = [session("$1", "a", { attached: 1 }), session("$2", "b", { attached: 0 })];
+    await mount();
+    const dots = [...root.querySelectorAll("#session-list .session")].map((row) => row.querySelector(".dot") !== null);
+    expect(dots).toEqual([true, false]);
+  });
+
+  test("an empty list renders no grouped card", async () => {
+    bridge.sessions = [];
+    await mount();
+    expect(root.querySelector("#session-list .group")).toBeNull();
+  });
+
   test("renders tmux text as text, never as markup", async () => {
     bridge.sessions = [session("$1", '<img src=x onerror="alert(1)">')];
     await mount();
