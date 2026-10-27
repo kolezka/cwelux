@@ -15,6 +15,7 @@ const COMMANDS: &[&str] = &[
     "get_launch_at_login",
     "set_launch_at_login",
     "glass_unavailable",
+    "list_remote_hosts",
 ];
 
 fn main() {

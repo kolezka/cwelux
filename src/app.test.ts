@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { createTauriBridge, type TmuxBridge } from "./api";
 import { createApp, renderUnavailable, type AppHandle } from "./app";
 import { DEFAULT_PREFERENCES, type Preferences } from "./preferences";
-import type { Session, SessionDetails } from "./types";
+import type { RemoteHostStatus, Session, SessionDetails } from "./types";
 
 type Method = keyof TmuxBridge;
 
@@ -58,6 +58,7 @@ class FakeBridge implements TmuxBridge {
   sessions: Session[] = [session("$1", "website", { attached: 1 }), session("$2", "api")];
   handlers: Partial<Record<Method, (...args: any[]) => Promise<any>>> = {};
   preferences: Preferences = { ...DEFAULT_PREFERENCES };
+  remoteHosts: RemoteHostStatus[] = [];
 
   private call<T>(method: Method, args: unknown[], fallback: () => T): Promise<T> {
     this.calls.push({ method, args });
@@ -113,7 +114,30 @@ class FakeBridge implements TmuxBridge {
   openSettings() {
     return this.call("openSettings", [], () => undefined);
   }
+  listRemoteHosts() {
+    return this.call("listRemoteHosts", [], () => structuredClone(this.remoteHosts));
+  }
 }
+
+const onlineHost = (name: string, sessions: Session[]): RemoteHostStatus => ({
+  name,
+  url: "http://100.64.0.5:7788",
+  state: "online",
+  error: null,
+  reportedHost: name,
+  capturedAt: 1_761_440_000,
+  sessions,
+});
+
+const offlineHost = (name: string, error: string): RemoteHostStatus => ({
+  name,
+  url: "http://100.64.0.9:7788",
+  state: "offline",
+  error,
+  reportedHost: null,
+  capturedAt: null,
+  sessions: [],
+});
 
 class FakeTimers {
   active = new Map<number, () => void>();
@@ -846,5 +870,129 @@ describe("preferences in the popover", () => {
     expect($("#footer-error").textContent).toContain("boom");
     app.applyPreferences(prefs({}));
     expect($("#footer-error").textContent).toBe("");
+  });
+});
+
+describe("remote hosts", () => {
+  const group = (name: string) => $(`[data-remote-host="${name}"].remote-host`);
+  const remoteNames = (name: string) =>
+    [...group(name).querySelectorAll(".session.remote .session-name")].map((el) => el.textContent);
+  const labels = () => [...root.querySelectorAll("#remote-hosts .section-label")].map((el) => el.textContent);
+
+  test("renders one read-only group per host after the new session button", async () => {
+    bridge.remoteHosts = [
+      onlineHost("local-arch", [session("$3", "work", { attached: 1 }), session("$4", "logs", { windows: 1 })]),
+      onlineHost("nas", [session("$1", "backup")]),
+    ];
+    await mount();
+    expect(labels()).toEqual(["ON LOCAL-ARCHOnline · 2 sessions", "ON NASOnline · 1 session"]);
+    expect(remoteNames("local-arch")).toEqual(["work", "logs"]);
+    expect(remoteNames("nas")).toEqual(["backup"]);
+    const row = $('.session.remote[data-remote-host="local-arch"][data-session-id="$3"]');
+    expect(row.tagName).toBe("DIV");
+    expect(row.querySelector(".session-meta")?.textContent).toBe("2 windows · 1 client attached");
+    expect(row.querySelector(".arrow")).toBeNull();
+    expect($("#new-session").nextElementSibling?.id).toBe("remote-hosts");
+    // Local rows are unchanged.
+    expect(sessionNames()).toEqual(["website", "api"]);
+  });
+
+  test("an offline host shows Offline with its reason and no rows", async () => {
+    bridge.remoteHosts = [offlineHost("nas", "timed out after 3 s")];
+    await mount();
+    expect(labels()).toEqual(["ON NASOffline"]);
+    expect(group("nas").querySelector(".remote-error")?.textContent).toBe("timed out after 3 s");
+    expect(group("nas").querySelectorAll(".session.remote")).toHaveLength(0);
+    expect(group("nas").querySelector(".remote-empty")).toBeNull();
+  });
+
+  test("an online host with no sessions says so", async () => {
+    bridge.remoteHosts = [onlineHost("arch", [])];
+    await mount();
+    expect(labels()).toEqual(["ON ARCHOnline · 0 sessions"]);
+    expect(group("arch").querySelector(".remote-empty")?.textContent).toBe("No tmux sessions.");
+  });
+
+  test("search filters remote rows and explains when nothing matches", async () => {
+    bridge.remoteHosts = [
+      onlineHost("arch", [session("$3", "work"), session("$4", "logs")]),
+      onlineHost("nas", [session("$1", "backup")]),
+    ];
+    await mount();
+    type("#search", "WO");
+    expect(remoteNames("arch")).toEqual(["work"]);
+    expect(remoteNames("nas")).toEqual([]);
+    expect(group("nas").querySelector(".remote-empty")?.textContent).toBe("No sessions match “WO”.");
+    expect(group("arch").querySelector(".remote-empty")).toBeNull();
+    // The count is the host total, not the filtered rows.
+    expect(labels()).toEqual(["ON ARCHOnline · 2 sessions", "ON NASOnline · 1 session"]);
+    type("#search", "");
+    expect(remoteNames("nas")).toEqual(["backup"]);
+  });
+
+  test("no configured hosts renders nothing extra", async () => {
+    await mount();
+    expect(bridge.count("listRemoteHosts")).toBe(1);
+    expect($("#remote-hosts").childElementCount).toBe(0);
+    expect(root.textContent).not.toContain("Could not read remote hosts.");
+  });
+
+  test("a remote failure shows one error line while the local list still renders", async () => {
+    bridge.handlers.listRemoteHosts = async () => {
+      throw "Remote hosts file /x/remote-hosts.json is invalid: malformed (EOF).";
+    };
+    await mount();
+    expect(sessionNames()).toEqual(["website", "api"]);
+    expect($("#list-state").dataset.state).toBe("ready");
+    const state = $("#remote-state");
+    expect(state.classList.contains("is-error")).toBe(true);
+    expect(state.querySelector("strong")?.textContent).toBe("Could not read remote hosts.");
+    expect(state.querySelector(".state-detail")?.textContent).toBe(
+      "Remote hosts file /x/remote-hosts.json is invalid: malformed (EOF).",
+    );
+    expect(labels()).toEqual([]);
+  });
+
+  test("a local failure still shows remote groups", async () => {
+    bridge.remoteHosts = [onlineHost("arch", [session("$3", "work")])];
+    bridge.handlers.listSessions = async () => {
+      throw "error connecting to /private/tmp/tmux-501/default (No such file or directory)";
+    };
+    await mount();
+    expect($("#list-state").dataset.state).toBe("error");
+    expect(remoteNames("arch")).toEqual(["work"]);
+  });
+
+  test("a slow remote host does not hold up the local list", async () => {
+    const slow = deferred<RemoteHostStatus[]>();
+    bridge.handlers.listRemoteHosts = () => slow.promise;
+    app = createApp({ root, bridge, timers, pollIntervalMs: 1000 });
+    const started = app.start();
+    await flush();
+    expect(sessionNames()).toEqual(["website", "api"]);
+    expect($("#list-state").dataset.state).toBe("ready");
+    expect(labels()).toEqual([]);
+    slow.resolve([onlineHost("arch", [session("$3", "work")])]);
+    await started;
+    expect(remoteNames("arch")).toEqual(["work"]);
+  });
+
+  test("a refresh replaces remote groups with the latest answer", async () => {
+    bridge.remoteHosts = [onlineHost("arch", [session("$3", "work")])];
+    await mount();
+    bridge.remoteHosts = [offlineHost("arch", "connection refused")];
+    await app.refresh();
+    await flush();
+    expect(labels()).toEqual(["ON ARCHOffline"]);
+    expect(group("arch").querySelectorAll(".session.remote")).toHaveLength(0);
+  });
+
+  test("clicking a remote row does not open the detail view", async () => {
+    bridge.remoteHosts = [onlineHost("arch", [session("$1", "same-id-as-local")])];
+    await mount();
+    $('.session.remote[data-remote-host="arch"]').click();
+    await flush();
+    expect(visibleView()).toBe("list");
+    expect(bridge.count("sessionDetails")).toBe(0);
   });
 });

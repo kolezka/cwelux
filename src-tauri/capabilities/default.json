@@ -18,6 +18,7 @@
     "allow-hide-popover",
     "allow-get-preferences",
     "allow-open-settings",
-    "allow-glass-unavailable"
+    "allow-glass-unavailable",
+    "allow-list-remote-hosts"
   ]
 }

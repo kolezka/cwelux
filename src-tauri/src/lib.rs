@@ -1,6 +1,7 @@
 pub mod glass;
 pub mod popover;
 pub mod process;
+pub mod remote;
 pub mod settings;
 pub mod terminal;
 pub mod tmux;
@@ -21,6 +22,7 @@ use tauri_plugin_dialog::DialogExt as _;
 
 use glass::GlassState;
 use popover::{HideReason, SettingsOpening};
+use remote::{RemoteHostStatus, RemoteHostsStore};
 use settings::{LoginItem, Preferences, PreferencesStore};
 use terminal::Launcher;
 use tmux::{Session, SessionDetails, Tmux, TmuxProvider};
@@ -152,6 +154,14 @@ async fn open_session(backend: State<'_, Backend>, session_id: String) -> Result
 async fn attach_command(backend: State<'_, Backend>, session_id: String) -> Result<String, String> {
     let tmux = backend.tmux()?;
     blocking(move || terminal::command_line(&tmux.attach_argv(&session_id)?)).await
+}
+
+#[tauri::command]
+async fn list_remote_hosts(
+    store: State<'_, RemoteHostsStore>,
+) -> Result<Vec<RemoteHostStatus>, String> {
+    let store = store.inner().clone();
+    blocking(move || store.list()).await
 }
 
 #[tauri::command]
@@ -448,13 +458,14 @@ pub fn run() {
             choose_directory,
             get_launch_at_login,
             set_launch_at_login,
-            glass_unavailable
+            glass_unavailable,
+            list_remote_hosts
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let path = settings::preferences_path(config_override, || {
+            let path = settings::preferences_path(config_override.clone(), || {
                 app.path().app_config_dir().map_err(|e| e.to_string())
             });
             if let Err(e) = &path {
@@ -465,6 +476,13 @@ pub fn run() {
             if let Ok(prefs) = app.state::<PreferencesStore>().load() {
                 glass::sync_theme(app.handle(), prefs.theme);
             }
+
+            let remote_path = settings::config_file_path(
+                config_override,
+                || app.path().app_config_dir().map_err(|e| e.to_string()),
+                remote::FILE_NAME,
+            );
+            app.manage(RemoteHostsStore::new(remote_path));
 
             let window = app
                 .get_webview_window(WINDOW)

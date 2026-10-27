@@ -73,15 +73,24 @@ pub fn preferences_path(
     override_dir: Option<OsString>,
     app_config_dir: impl FnOnce() -> Result<PathBuf, String>,
 ) -> Result<PathBuf, String> {
+    config_file_path(override_dir, app_config_dir, FILE_NAME)
+}
+
+/// Resolves any config file name with the same directory rules as the preferences file.
+pub fn config_file_path(
+    override_dir: Option<OsString>,
+    app_config_dir: impl FnOnce() -> Result<PathBuf, String>,
+    file_name: &str,
+) -> Result<PathBuf, String> {
     match override_dir {
         Some(dir) if !dir.is_empty() => {
             let dir = PathBuf::from(dir);
             if !dir.is_absolute() {
                 return Err(format!("{CONFIG_DIR_ENV} must be an absolute path."));
             }
-            Ok(dir.join(FILE_NAME))
+            Ok(dir.join(file_name))
         }
-        _ => Ok(app_config_dir()?.join(FILE_NAME)),
+        _ => Ok(app_config_dir()?.join(file_name)),
     }
 }
 
@@ -401,6 +410,14 @@ mod tests {
         );
         assert!(preferences_path(Some("rel".into()), fallback).is_err());
         assert!(preferences_path(None, || Err("none".into())).is_err());
+        assert_eq!(
+            config_file_path(Some("/tmp/x".into()), fallback, "remote-hosts.json").unwrap(),
+            PathBuf::from("/tmp/x/remote-hosts.json")
+        );
+        assert_eq!(
+            config_file_path(None, fallback, "remote-hosts.json").unwrap(),
+            PathBuf::from("/app/config/remote-hosts.json")
+        );
     }
 
     struct FakeLogin {

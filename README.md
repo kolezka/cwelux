@@ -33,6 +33,34 @@ Preferences are saved to `preferences.json` in the app's config folder and survi
 
 While Settings is open, the popover does not hide when it loses focus, so you can use both side by side. The tray icon and Escape still close it. For launch at login, move the app to a stable location such as `/Applications` first.
 
+## Remote hosts (stage 1)
+
+Cwelux can also list tmux sessions on other machines. Each host appears below the local list and the **+ New session** button, under a heading such as `ON LOCAL-ARCH`. It shows `Online` with a session count, or `Offline` with the reason, for example `token rejected` or `timed out after 3 s`. The search box filters remote sessions too.
+
+Remote sessions are read-only. You cannot open, rename or end them from Cwelux, and clicking a remote row does nothing.
+
+Each host runs `cwelux-agent`, a small HTTP server that reports its tmux sessions. See [`agent/README.md`](agent/README.md) to build and install it.
+
+List the hosts in `remote-hosts.json`, in the same folder as `preferences.json`. On macOS that is `~/Library/Application Support/dev.cwelux.app/`, or the folder in `CWELUX_CONFIG_DIR` when set.
+
+```json
+{
+  "hosts": [
+    { "name": "local-arch", "url": "http://100.64.0.5:7788", "token": "<token from the agent's token file>" }
+  ]
+}
+```
+
+- `name`: 1 to 64 characters, unique.
+- `url`: `http://` with a host and optional port. No path, query or fragment.
+- `token`: the same token the agent reads from its token file.
+
+Without the file, no remote hosts are shown. A malformed file shows `Could not read remote hosts.` with the reason. Cwelux reads the file on every refresh, so edits apply without a restart. There is no settings screen for hosts yet.
+
+Only plain `http` is supported. Use it over a private network such as Tailscale, which already encrypts the traffic. The token keeps other machines on that network from reading the list. `https` URLs are accepted in the file but do not work yet.
+
+A reply is checked before it is shown. A host that answers with more than 500 sessions, a session name over 256 characters, or a number too large for the app is shown as offline with the reason, and the other hosts are not affected.
+
 ## Requirements
 
 - macOS. Other operating systems are not supported in this version.
@@ -87,7 +115,7 @@ Set these before launching the app:
 | --- | --- |
 | `CWELUX_TMUX_PATH` | Absolute path to the tmux executable. Otherwise Cwelux searches PATH and standard Homebrew locations. |
 | `CWELUX_TMUX_SOCKET` | Absolute socket path, passed to tmux as `-S`. Leave unset to use the normal local server. |
-| `CWELUX_CONFIG_DIR` | Absolute folder for `preferences.json`, useful for testing. It does not affect launch at login. |
+| `CWELUX_CONFIG_DIR` | Absolute folder for `preferences.json` and `remote-hosts.json`, useful for testing. It does not affect launch at login. |
 
 For example, to work with an explicitly selected test server:
 
@@ -114,7 +142,7 @@ Live tmux integration tests currently expect `/opt/homebrew/bin/tmux`. They use 
 
 ## Scope and limitations
 
-- One local tmux server at a time. No SSH or embedded interactive terminal.
+- One local tmux server at a time. Remote hosts are read-only lists, reached through `cwelux-agent` over plain HTTP. No SSH or embedded interactive terminal.
 - Pane output is read-only and rendered as text.
 - No application telemetry or cloud service.
 - Other terminal handlers and mixed-DPI multi-monitor placement need further testing.
