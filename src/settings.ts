@@ -69,7 +69,7 @@ export function createSettingsApp({ root, bridge }: SettingsOptions): SettingsHa
     el("header", { class: "bar" }, el("div", { class: "bar-left" }, el("h2", { text: "Settings" }))),
     el("div", { class: "body" },
       el("label", { class: "toggle" },
-        el("div", {},
+        el("span", { class: "toggle-copy" },
           el("strong", { text: "Launch at login" }),
           el("small", { class: "hint", id: "login-hint", text: "Applies immediately. Not part of Save." })),
         loginBox,
