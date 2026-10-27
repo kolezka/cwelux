@@ -525,3 +525,33 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Cwelux");
 }
+
+#[cfg(test)]
+mod permission_tests {
+    #[test]
+    fn glass_state_query_is_available_to_both_windows() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../gen/schemas/acl-manifests.json")).unwrap();
+        let allowed = manifest["__app-acl__"]["permissions"]["allow-glass-unavailable"]["commands"]
+            ["allow"]
+            .as_array()
+            .expect("glass state command must have a generated permission");
+        assert!(allowed.iter().any(|command| command == "glass_unavailable"));
+
+        for (window, capability) in [
+            ("main", include_str!("../capabilities/default.json")),
+            ("settings", include_str!("../capabilities/settings.json")),
+        ] {
+            let capability: serde_json::Value = serde_json::from_str(capability).unwrap();
+            assert_eq!(capability["windows"][0], window);
+            assert!(
+                capability["permissions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|permission| permission == "allow-glass-unavailable"),
+                "{window} must be allowed to query its glass state"
+            );
+        }
+    }
+}

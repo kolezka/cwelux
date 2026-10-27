@@ -17,6 +17,7 @@
     "allow-attach-command",
     "allow-hide-popover",
     "allow-get-preferences",
-    "allow-open-settings"
+    "allow-open-settings",
+    "allow-glass-unavailable"
   ]
 }
