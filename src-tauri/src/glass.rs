@@ -1,9 +1,30 @@
+use std::collections::HashSet;
+use std::sync::Mutex;
+
 use tauri::{AppHandle, Manager, WebviewWindow};
 
 use crate::settings::Theme;
 
-/// Emitted on a window whose native material failed, so the UI can use its CSS fallback.
-pub const GLASS_FLAG_EVENT: &str = "glass-unavailable";
+/// Labels of windows whose native material failed. The UI asks on load, since an event
+/// sent during window creation would arrive before its listener exists.
+#[derive(Default)]
+pub struct GlassState(Mutex<HashSet<String>>);
+
+impl GlassState {
+    pub fn mark_failed(&self, label: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(label.to_owned());
+    }
+
+    pub fn is_failed(&self, label: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(label)
+    }
+}
 
 /// Message logged and used to decide the CSS fallback. Pure so it is testable.
 pub fn material_failure_message(window: &str, error: &str) -> String {
@@ -67,8 +88,6 @@ fn apply_material(
     name: &str,
     material: window_vibrancy::NSVisualEffectMaterial,
 ) -> Result<(), String> {
-    use tauri::Emitter;
-
     window_vibrancy::apply_vibrancy(
         window,
         material,
@@ -78,9 +97,10 @@ fn apply_material(
     .map_err(|e| {
         let error = e.to_string();
         eprintln!("{}", material_failure_message(name, &error));
-        if let Err(emit_error) = window.emit(GLASS_FLAG_EVENT, ()) {
-            eprintln!("cwelux: could not signal missing glass: {emit_error}");
-        }
+        window
+            .app_handle()
+            .state::<GlassState>()
+            .mark_failed(window.label());
         error
     })
 }
@@ -95,6 +115,15 @@ mod tests {
             material_failure_message("settings", "not main thread"),
             "cwelux: glass material unavailable for settings window: not main thread"
         );
+    }
+
+    #[test]
+    fn failed_material_is_remembered_per_window() {
+        let state = GlassState::default();
+        state.mark_failed("settings");
+        assert!(state.is_failed("settings"));
+        assert!(!state.is_failed("main"));
+        assert!(!state.is_failed("unknown"));
     }
 
     #[test]

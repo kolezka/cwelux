@@ -17,6 +17,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::DialogExt as _;
 
+use glass::GlassState;
 use popover::{HideReason, SettingsOpening};
 use settings::{LoginItem, Preferences, PreferencesStore};
 use terminal::Launcher;
@@ -177,6 +178,11 @@ async fn save_preferences(
         eprintln!("cwelux: could not broadcast new preferences: {e}");
     }
     Ok(saved)
+}
+
+#[tauri::command]
+fn glass_unavailable(window: tauri::Window, state: State<'_, GlassState>) -> bool {
+    state.is_failed(window.label())
 }
 
 // Async so window creation does not block the main thread it needs.
@@ -404,6 +410,7 @@ pub fn run() {
         .manage(backend)
         .manage(PopoverState::default())
         .manage(LoginItemLock::default())
+        .manage(GlassState::default())
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             session_details,
@@ -419,7 +426,8 @@ pub fn run() {
             open_settings,
             choose_directory,
             get_launch_at_login,
-            set_launch_at_login
+            set_launch_at_login,
+            glass_unavailable
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
