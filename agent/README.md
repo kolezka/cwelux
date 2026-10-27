@@ -27,6 +27,17 @@ fails, the reply is 500 with `{"error": "..."}`.
 There is no TLS. Run it on a private network such as Tailscale, which already encrypts the
 traffic. The token keeps other peers on that network from reading the list.
 
+## Limits
+
+The agent serves at most 16 connections at once. Extra connections get 503 with
+`{"error":"busy"}`. A client has 5 seconds to send its request head and the head may be at
+most 8 KiB. A slow client is dropped without a reply, and a larger head gets 431. Each
+connection carries one request and is closed after the reply. tmux runs for one request at a
+time. A request that waits more than 5 seconds for its turn gets 503.
+
+To keep everyone else off the port, bind only the Tailscale address with `--listen`, as
+described under Configuration.
+
 ## Build
 
 On the Linux host, with Rust 1.82 or newer:
@@ -86,7 +97,8 @@ sudo loginctl enable-linger "$USER"
 ```
 
 Logs: `journalctl --user -u cwelux-agent`. Each request is one line with the method, path,
-status and time in ms. The token is never logged.
+status and time in ms. The path is cut to 120 characters, and anything other than printable
+ASCII shows as `?`. Header values, including the token, are never logged.
 
 ## Test
 

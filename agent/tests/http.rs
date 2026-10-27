@@ -2,7 +2,7 @@
 //! and a private live tmux server when one is installed.
 
 use cwelux_agent::process::run_bounded;
-use cwelux_agent::server::{Agent, AgentConfig};
+use cwelux_agent::server::{Agent, AgentConfig, Limits};
 use cwelux_agent::tmux::TmuxConfig;
 use serde_json::Value;
 use std::fs;
@@ -12,7 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const TOKEN: &str = "test-token-0123456789";
 const LIVE_TMUX: &str = "/opt/homebrew/bin/tmux";
@@ -36,25 +37,34 @@ fn fake_tmux(dir: &Path, body: &str) -> PathBuf {
 
 /// Starts an agent on an ephemeral port. The serving thread lives until the test process exits.
 fn start(tmux: TmuxConfig) -> SocketAddr {
+    start_with(tmux, Limits::default()).local_addr()
+}
+
+fn start_with(tmux: TmuxConfig, limits: Limits) -> Arc<Agent> {
     let config = AgentConfig {
         token: TOKEN.into(),
         host: "test-host".into(),
         tmux: Box::new(move || Ok(tmux.clone())),
+        limits,
     };
-    let agent = Agent::bind("127.0.0.1:0", config).unwrap();
-    let addr = agent.local_addr();
-    std::thread::spawn(move || agent.serve());
-    addr
+    let agent = Arc::new(Agent::bind("127.0.0.1:0", config).unwrap());
+    let serving = Arc::clone(&agent);
+    std::thread::spawn(move || serving.serve());
+    agent
 }
 
-fn start_fake(tag: &str, body: &str) -> SocketAddr {
+fn fake_config(tag: &str, body: &str) -> TmuxConfig {
     let dir = temp_dir(tag);
-    start(TmuxConfig {
+    TmuxConfig {
         binary: fake_tmux(&dir, body),
         socket: None,
         config_file: None,
         timeout: Duration::from_secs(5),
-    })
+    }
+}
+
+fn start_fake(tag: &str, body: &str) -> SocketAddr {
+    start(fake_config(tag, body))
 }
 
 struct Reply {
@@ -78,10 +88,6 @@ impl Reply {
 }
 
 fn request(addr: SocketAddr, method: &str, path: &str, auth: Option<&str>) -> Reply {
-    let mut stream = TcpStream::connect(addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n");
     if let Some(value) = auth {
         head.push_str(&format!("Authorization: {value}\r\n"));
@@ -90,7 +96,20 @@ fn request(addr: SocketAddr, method: &str, path: &str, auth: Option<&str>) -> Re
         head.push_str("Content-Length: 0\r\n");
     }
     head.push_str("\r\n");
-    stream.write_all(head.as_bytes()).unwrap();
+    exchange(addr, head.as_bytes())
+}
+
+/// Sends raw bytes and parses the reply.
+fn exchange(addr: SocketAddr, bytes: &[u8]) -> Reply {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(bytes).unwrap();
+    read_reply(&mut stream)
+}
+
+fn read_reply(stream: &mut TcpStream) -> Reply {
     let mut raw = String::new();
     stream.read_to_string(&mut raw).unwrap();
     let (head, body) = raw
@@ -405,4 +424,156 @@ fn live_tmux_session_is_reported() {
     assert!(sessions[0]["id"].as_str().unwrap().starts_with('$'));
     assert_eq!(sessions[0]["windows"], 1);
     assert_eq!(sessions[0]["attached"], 0);
+}
+
+fn quick_limits(read_timeout_ms: u64, max_connections: usize) -> Limits {
+    Limits {
+        read_timeout: Duration::from_millis(read_timeout_ms),
+        max_connections,
+        ..Limits::default()
+    }
+}
+
+/// Polls until the agent has `want` live connections, so a test never races the accept thread.
+fn wait_for_connections(agent: &Agent, want: usize, within: Duration) {
+    let deadline = Instant::now() + within;
+    while agent.connection_count() != want {
+        assert!(
+            Instant::now() < deadline,
+            "expected {want} connections, have {}",
+            agent.connection_count()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn idle_partial_headers_do_not_hold_the_server() {
+    let agent = start_with(fake_config("idle", CANNED), quick_limits(300, 64));
+    let addr = agent.local_addr();
+    let mut idle: Vec<TcpStream> = (0..20)
+        .map(|_| {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream
+                .write_all(b"GET /v1/sessions HTTP/1.1\r\nHost: x\r\n")
+                .unwrap();
+            stream
+        })
+        .collect();
+    wait_for_connections(&agent, 20, Duration::from_secs(2));
+
+    let started = Instant::now();
+    let reply = request(addr, "GET", "/v1/sessions", Some(&bearer()));
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    std::thread::sleep(Duration::from_millis(300 + 700));
+    assert_eq!(
+        agent.connection_count(),
+        0,
+        "idle connections were not closed"
+    );
+    // The server closed each idle socket without writing anything.
+    for stream in &mut idle {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).unwrap();
+        assert!(rest.is_empty(), "{:?}", String::from_utf8_lossy(&rest));
+    }
+    let reply = request(addr, "GET", "/v1/sessions", Some(&bearer()));
+    assert_eq!(reply.status, 200, "{}", reply.body);
+}
+
+#[test]
+fn connections_over_the_cap_get_busy() {
+    let agent = start_with(fake_config("cap", CANNED), quick_limits(3000, 4));
+    let addr = agent.local_addr();
+    let _held: Vec<TcpStream> = (0..4).map(|_| TcpStream::connect(addr).unwrap()).collect();
+    wait_for_connections(&agent, 4, Duration::from_secs(2));
+
+    let started = Instant::now();
+    let mut extra = TcpStream::connect(addr).unwrap();
+    extra
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let reply = read_reply(&mut extra);
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(reply.status, 503);
+    assert_eq!(reply.header("Connection"), Some("close"));
+    assert_eq!(reply.json(), serde_json::json!({ "error": "busy" }));
+}
+
+#[test]
+fn oversized_head_is_rejected() {
+    let addr = start_fake("431", CANNED);
+    let mut head = b"GET /v1/sessions HTTP/1.1\r\n".to_vec();
+    while head.len() < 9000 {
+        head.extend_from_slice(b"X-Filler: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+    }
+    let reply = exchange(addr, &head);
+    assert_eq!(reply.status, 431);
+    assert!(reply.json()["error"].is_string());
+}
+
+#[test]
+fn malformed_request_line_is_bad_request() {
+    let addr = start_fake("400", CANNED);
+    let reply = exchange(addr, b"GARBAGE\r\n\r\n");
+    assert_eq!(reply.status, 400);
+    assert!(reply.json()["error"].is_string());
+}
+
+#[test]
+fn replies_carry_length_and_close() {
+    let addr = start_fake("framing", CANNED);
+    let reply = request(addr, "GET", "/v1/sessions", Some(&bearer()));
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("Connection"), Some("close"));
+    assert_eq!(
+        reply.header("Content-Length"),
+        Some(reply.body.len().to_string().as_str())
+    );
+}
+
+#[test]
+fn tmux_calls_never_overlap() {
+    let dir = temp_dir("serial");
+    let marker = dir.join("running");
+    let overlaps = dir.join("overlaps");
+    let body = format!(
+        "mkdir '{m}' 2>/dev/null || echo overlap >> '{o}'\nsleep 0.2\nrmdir '{m}' 2>/dev/null\n{CANNED}",
+        m = marker.display(),
+        o = overlaps.display()
+    );
+    let tmux = TmuxConfig {
+        binary: fake_tmux(&dir, &body),
+        socket: None,
+        config_file: None,
+        timeout: Duration::from_secs(5),
+    };
+    let addr = start_with(tmux, quick_limits(5000, 16)).local_addr();
+    let handles: Vec<_> = (0..4)
+        .map(|_| std::thread::spawn(move || request(addr, "GET", "/v1/sessions", Some(&bearer()))))
+        .collect();
+    for handle in handles {
+        assert_eq!(handle.join().unwrap().status, 200);
+    }
+    assert!(!overlaps.exists(), "tmux ran concurrently");
+}
+
+#[test]
+fn waiting_too_long_for_tmux_is_busy() {
+    let body = format!("sleep 1\n{CANNED}");
+    let addr = start_with(fake_config("slow", &body), quick_limits(300, 16)).local_addr();
+    let handles: Vec<_> = (0..2)
+        .map(|_| std::thread::spawn(move || request(addr, "GET", "/v1/sessions", Some(&bearer()))))
+        .collect();
+    let mut statuses: Vec<u16> = handles
+        .into_iter()
+        .map(|h| h.join().unwrap().status)
+        .collect();
+    statuses.sort();
+    assert_eq!(statuses, [200, 503]);
 }

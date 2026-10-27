@@ -1,5 +1,5 @@
 use cwelux_agent::process::run_bounded;
-use cwelux_agent::server::{Agent, AgentConfig};
+use cwelux_agent::server::{Agent, AgentConfig, Limits};
 use cwelux_agent::tmux::{self, TmuxConfig};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -176,6 +176,7 @@ fn start() -> Result<Option<Agent>, (u8, String)> {
         token,
         host,
         tmux: Box::new(TmuxConfig::from_env),
+        limits: Limits::default(),
     };
     let agent = Agent::bind(&settings.listen, config).map_err(|e| (1, e))?;
     eprintln!("cwelux-agent listening on {}", agent.local_addr());
