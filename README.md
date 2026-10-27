@@ -4,6 +4,11 @@ Manage local tmux sessions from the macOS menu bar. Built with **Tauri 2, Rust, 
 
 Cwelux handles the routine commands while your terminal stays available for interactive work. Closing the popover does not stop your sessions.
 
+<p align="center">
+  <img src="docs/screenshots/popover-dark.png" width="340" alt="The Cwelux popover in dark mode: a glass pane under the menu bar listing two tmux sessions, a search field and a New session button">
+  <img src="docs/screenshots/settings-dark.png" width="352" alt="The Cwelux Settings window in dark mode: a Launch at login switch, a default directory field, and segmented controls for refresh interval and theme">
+</p>
+
 ## Features
 
 - **Find sessions:** search by name and see window counts and attached clients.
