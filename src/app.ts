@@ -10,7 +10,7 @@ import {
   validateDirectory,
   validateSessionName,
 } from "./state";
-import type { Pane, Session, SessionDetails, TmuxWindow } from "./types";
+import type { Pane, RemoteHostStatus, Session, SessionDetails, TmuxWindow } from "./types";
 
 export interface Timers {
   setInterval(fn: () => void, ms: number): unknown;
@@ -63,6 +63,11 @@ export function builder(doc: Document) {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+const sessionMeta = (s: Session) =>
+  `${plural(s.windows, "window")} · ${s.attached ? `${plural(s.attached, "client")} attached` : "Detached"}`;
+
+const noMatch = (query: string) => `No sessions match “${query.trim()}”.`;
+
 function formatCreated(seconds: number, now = new Date()): string {
   const date = new Date(seconds * 1000);
   const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -104,6 +109,8 @@ export function createApp(options: AppOptions): AppHandle {
   let sessions: Session[] | null = null;
   let listError: string | null = null;
   let lastUpdated: Date | null = null;
+  let remoteHosts: RemoteHostStatus[] = [];
+  let remoteError: string | null = null;
   let selectedId: string | null = null;
   let details: SessionDetails | null = null;
   let detailError: string | null = null;
@@ -129,6 +136,7 @@ export function createApp(options: AppOptions): AppHandle {
   const retry = el("button", { id: "retry", class: "quiet", type: "button", text: "Try again", hidden: true });
   const sessionList = el("div", { id: "session-list" });
   const newSession = el("button", { id: "new-session", class: "primary wide", type: "button", text: "+ New session" });
+  const remoteList = el("div", { id: "remote-hosts" });
 
   const openSettings = el("button", { class: "quiet", id: "open-settings", type: "button", text: "Settings" });
   const footerError = el("p", { class: "error footer-error", id: "footer-error", role: "alert" });
@@ -147,7 +155,7 @@ export function createApp(options: AppOptions): AppHandle {
     el("div", { class: "body" },
       search,
       el("div", { class: "section-label" }, el("span", { text: "ON THIS MAC" }), updated),
-      listState, retry, sessionList, newSession),
+      listState, retry, sessionList, newSession, remoteList),
   );
 
   const back = el("button", { class: "icon", id: "back", type: "button", "aria-label": "Back to sessions", text: "‹" });
@@ -247,7 +255,7 @@ export function createApp(options: AppOptions): AppHandle {
       loading: ["Loading sessions…", ""],
       ready: ["", ""],
       empty: ["No tmux sessions running.", "Start one below."],
-      "no-match": [`No sessions match “${search.value.trim()}”.`, ""],
+      "no-match": [noMatch(search.value), ""],
       error: ["Could not list tmux sessions.", listError ?? ""],
       "missing-tmux": [
         "tmux not found.",
@@ -266,12 +274,41 @@ export function createApp(options: AppOptions): AppHandle {
           el("span", { class: "session-icon", text: ">_", "aria-hidden": "true" }),
           el("span", { class: "session-copy" },
             el("span", { class: "session-name", text: s.name }),
-            el("span", {
-              class: "session-meta",
-              text: `${plural(s.windows, "window")} · ${s.attached ? `${plural(s.attached, "client")} attached` : "Detached"}`,
-            })),
+            el("span", { class: "session-meta", text: sessionMeta(s) })),
           el("span", { class: "arrow", text: "›", "aria-hidden": "true" }))),
     );
+    renderRemote();
+  }
+
+  /** Read-only groups, one per configured host. Nothing at all when no hosts are configured. */
+  function renderRemote() {
+    if (remoteError !== null) {
+      remoteList.replaceChildren(
+        el("div", { class: "state is-error", id: "remote-state", role: "status" },
+          el("strong", { text: "Could not read remote hosts." }),
+          el("span", { class: "state-detail", text: remoteError })),
+      );
+      return;
+    }
+    remoteList.replaceChildren(...remoteHosts.map((host) => {
+      const online = host.state === "online";
+      const visible = filterSessions(host.sessions, search.value);
+      let empty: string | null = null;
+      if (online && host.sessions.length === 0) empty = "No tmux sessions.";
+      else if (online && visible.length === 0) empty = noMatch(search.value);
+      return el("div", { class: "remote-host", "data-remote-host": host.name },
+        el("div", { class: "section-label" },
+          el("span", { text: `ON ${host.name.toUpperCase()}` }),
+          el("span", { class: "remote-status", text: online ? `Online · ${plural(host.sessions.length, "session")}` : "Offline" })),
+        ...(online ? [] : [el("div", { class: "remote-error", text: host.error ?? "" })]),
+        ...(empty === null ? [] : [el("div", { class: "state remote-empty", text: empty })]),
+        ...(online ? visible : []).map((s) =>
+          el("div", { class: "session remote", "data-remote-host": host.name, "data-session-id": s.id },
+            el("span", { class: "session-icon", text: ">_", "aria-hidden": "true" }),
+            el("span", { class: "session-copy" },
+              el("span", { class: "session-name", text: s.name }),
+              el("span", { class: "session-meta", text: sessionMeta(s) })))));
+    }));
   }
 
   function selectedSession(): Session | null {
@@ -393,16 +430,37 @@ export function createApp(options: AppOptions): AppHandle {
   }
 
   async function refreshTask(): Promise<void> {
+    // Each side renders as soon as it lands, so a slow remote host never holds up the local list.
+    const local = bridge.listSessions().then(
+      (next) => {
+        sessions = next;
+        listError = null;
+        lastUpdated = new Date();
+      },
+      (error) => {
+        sessions = null;
+        listError = errorMessage(error);
+      },
+    ).then(renderList);
+    const remote = bridge.listRemoteHosts().then(
+      (next) => {
+        remoteHosts = next;
+        remoteError = null;
+      },
+      (error) => {
+        remoteHosts = [];
+        remoteError = errorMessage(error);
+      },
+    ).then(renderRemote);
     try {
-      sessions = await bridge.listSessions();
-      listError = null;
-      lastUpdated = new Date();
-    } catch (error) {
-      sessions = null;
-      listError = errorMessage(error);
+      await local;
+      await refreshDetail();
+    } finally {
+      await Promise.allSettled([local, remote]);
     }
-    renderList();
+  }
 
+  async function refreshDetail(): Promise<void> {
     if (view !== "detail" || !selectedId) return;
     if (sessions && !sessions.some((s) => s.id === selectedId)) {
       token = epoch.next();

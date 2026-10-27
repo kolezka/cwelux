@@ -42,6 +42,7 @@ describe("createTauriBridge command contract", () => {
       [(b) => b.hidePopover(), null, { command: "hide_popover", args: undefined }],
       [(b) => b.getPreferences(), validPrefs, { command: "get_preferences", args: undefined }],
       [(b) => b.openSettings(), null, { command: "open_settings", args: undefined }],
+      [(b) => b.listRemoteHosts(), [], { command: "list_remote_hosts", args: undefined }],
     ];
     for (const [call, result, expected] of cases) {
       const fake = fakeInvoke(result);
@@ -106,6 +107,66 @@ describe("createTauriBridge rejects malformed data instead of showing an empty l
   test("create_session requires a session", async () => {
     await expect(createTauriBridge(fakeInvoke(null).invoke).createSession("a", "~")).rejects.toBeInstanceOf(BridgeDataError);
   });
+});
+
+const onlineHost = {
+  name: "local-arch",
+  url: "http://100.64.0.5:7788",
+  state: "online",
+  error: null,
+  reportedHost: "local-arch",
+  capturedAt: 1_761_440_000,
+  sessions: [validSession],
+};
+const offlineHost = {
+  name: "nas",
+  url: "http://100.64.0.9:7788",
+  state: "offline",
+  error: "connection refused",
+  reportedHost: null,
+  capturedAt: null,
+  sessions: [],
+};
+
+describe("list_remote_hosts decoding", () => {
+  test("decodes online and offline hosts in order", async () => {
+    const bridge = createTauriBridge(fakeInvoke([onlineHost, offlineHost]).invoke);
+    expect(await bridge.listRemoteHosts()).toEqual([onlineHost, offlineHost] as never);
+    expect(await createTauriBridge(fakeInvoke([]).invoke).listRemoteHosts()).toEqual([]);
+  });
+
+  test("passes a broken config error through unchanged", async () => {
+    const bridge = createTauriBridge(async () => {
+      throw "Remote hosts file /x/remote-hosts.json is invalid: malformed (EOF).";
+    });
+    await expect(bridge.listRemoteHosts()).rejects.toBe("Remote hosts file /x/remote-hosts.json is invalid: malformed (EOF).");
+  });
+
+  const { error: _error, ...withoutError } = onlineHost;
+  const malformed: unknown[] = [
+    null,
+    {},
+    [null],
+    [{ ...onlineHost, state: "Online" }],
+    [{ ...onlineHost, state: "unknown" }],
+    [{ ...onlineHost, name: "" }],
+    [{ ...onlineHost, name: 3 }],
+    [{ ...onlineHost, url: null }],
+    [withoutError],
+    [{ ...onlineHost, error: "boom" }],
+    [{ ...onlineHost, reportedHost: 1 }],
+    [{ ...onlineHost, capturedAt: -1 }],
+    [{ ...onlineHost, capturedAt: "1" }],
+    [{ ...onlineHost, sessions: null }],
+    [{ ...onlineHost, sessions: [{ ...validSession, windows: "2" }] }],
+    [{ ...offlineHost, error: null }],
+    [{ ...offlineHost, sessions: [validSession] }],
+  ];
+  for (const payload of malformed) {
+    test(`rejects payload ${JSON.stringify(payload)}`, async () => {
+      await expect(createTauriBridge(fakeInvoke(payload).invoke).listRemoteHosts()).rejects.toBeInstanceOf(BridgeDataError);
+    });
+  }
 });
 
 describe("createSettingsBridge command contract", () => {

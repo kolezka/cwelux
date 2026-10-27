@@ -100,6 +100,12 @@ code, pre, .mono { font-family: var(--mono); }
 .session-meta { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .arrow { color: var(--muted); }
 
+/* Remote rows are read-only: no pointer, no hover. */
+.session.remote { cursor: default; }
+.session.remote:hover { background: none; }
+.remote-error { font-size: 11px; color: var(--muted); margin: -3px 0 6px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.remote-empty { padding: 8px 2px; }
+
 .primary { background: var(--soft); color: var(--accent); border: 1px solid var(--line); border-radius: 7px; padding: 9px 12px; font-weight: 600; font-size: 12px; }
 .primary:hover:not(:disabled) { border-color: var(--accent); }
 .wide { width: 100%; margin-top: 20px; }
