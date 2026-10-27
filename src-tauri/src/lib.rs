@@ -171,6 +171,7 @@ async fn save_preferences(
     preferences: Preferences,
 ) -> Result<Preferences, String> {
     let saved = store.save(&preferences)?;
+    glass::sync_theme(&app, saved.theme);
     // The file is already written, so a failed broadcast must not look like a failed save.
     if let Err(e) = app.emit(PREFERENCES_EVENT, &saved) {
         eprintln!("cwelux: could not broadcast new preferences: {e}");
@@ -431,6 +432,10 @@ pub fn run() {
                 eprintln!("cwelux: settings location unavailable: {e}");
             }
             app.manage(PreferencesStore::new(path, home));
+            // A load error is already shown by the UI, so the theme just stays on system.
+            if let Ok(prefs) = app.state::<PreferencesStore>().load() {
+                glass::sync_theme(app.handle(), prefs.theme);
+            }
 
             let window = app
                 .get_webview_window(WINDOW)
