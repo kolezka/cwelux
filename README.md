@@ -56,6 +56,8 @@ Without the file, no remote hosts are shown. A malformed file shows `Could not r
 
 Only plain `http` is supported. Use it over a private network such as Tailscale, which already encrypts the traffic. The token keeps other machines on that network from reading the list. `https` URLs are accepted in the file but do not work yet.
 
+A reply is checked before it is shown. A host that answers with more than 500 sessions, a session name over 256 characters, or a number too large for the app is shown as offline with the reason, and the other hosts are not affected.
+
 ## Requirements
 
 - macOS. Other operating systems are not supported in this version.

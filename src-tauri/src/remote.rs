@@ -22,6 +22,13 @@ const SESSIONS_PATH: &str = "/v1/sessions";
 const MAX_NAME_CHARS: usize = 64;
 /// The agent caps tmux output at 8 MiB, so a valid reply stays well under this.
 const MAX_BODY: u64 = 16 * 1024 * 1024;
+/// More sessions than any real host has. Keeps a hostile reply from flooding the popover.
+pub const MAX_SESSIONS: usize = 500;
+/// tmux names have no fixed cap, but the UI cannot show more than this anyway.
+const MAX_SESSION_NAME_CHARS: usize = 256;
+const MAX_HOST_CHARS: usize = 253;
+/// Largest integer JavaScript represents exactly. Anything above it would fail in the UI decoder.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
 /// One configured host. The token never appears in `Debug` output or error strings.
 #[derive(Clone, PartialEq, Eq)]
@@ -199,6 +206,18 @@ pub fn decode_payload(body: &[u8]) -> Result<Snapshot, String> {
     if wire.host.is_empty() {
         return Err("bad response (empty host)".into());
     }
+    if wire.host.chars().count() > MAX_HOST_CHARS {
+        return Err("bad response (host name too long)".into());
+    }
+    if wire.captured_at > MAX_SAFE_INTEGER {
+        return Err("bad response (capturedAt out of range)".into());
+    }
+    if wire.sessions.len() > MAX_SESSIONS {
+        return Err(format!(
+            "bad response ({} sessions, more than {MAX_SESSIONS})",
+            wire.sessions.len()
+        ));
+    }
     let sessions = wire
         .sessions
         .into_iter()
@@ -206,6 +225,15 @@ pub fn decode_payload(body: &[u8]) -> Result<Snapshot, String> {
             validate_session_id(&s.id).map_err(|e| format!("bad response ({e})"))?;
             if s.name.is_empty() {
                 return Err(format!("bad response (session {} has no name)", s.id));
+            }
+            if s.name.chars().count() > MAX_SESSION_NAME_CHARS {
+                return Err(format!("bad response (session {} name too long)", s.id));
+            }
+            if s.created > MAX_SAFE_INTEGER {
+                return Err(format!(
+                    "bad response (session {} created out of range)",
+                    s.id
+                ));
             }
             Ok(Session {
                 id: s.id,
@@ -593,6 +621,39 @@ mod tests {
                 r#"{"protocol":1,"host":"h","sessions":[]}"#.into(),
                 "missing field",
             ),
+            // Values the UI decoder would reject must be rejected here, per host, not later for all.
+            (
+                r#"{"protocol":1,"host":"h","capturedAt":9007199254740992,"sessions":[]}"#.into(),
+                "capturedAt out of range",
+            ),
+            (
+                with(
+                    "1",
+                    "h",
+                    &session.replace("\"created\":5", "\"created\":9007199254740992"),
+                ),
+                "created out of range",
+            ),
+            (
+                with(
+                    "1",
+                    "h",
+                    &session.replace("\"work\"", &format!("\"{}\"", "n".repeat(257))),
+                ),
+                "name too long",
+            ),
+            (with("1", &"h".repeat(254), session), "host name too long"),
+            (
+                with(
+                    "1",
+                    "h",
+                    &(0..MAX_SESSIONS + 1)
+                        .map(|i| session.replace("$3", &format!("${i}")))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                "more than 500",
+            ),
             ("[]".into(), "no protocol"),
             ("{\"protocol\":1".into(), "bad response"),
             ("<html>".into(), "bad response"),
@@ -601,6 +662,26 @@ mod tests {
             let err = decode_payload(body.as_bytes()).expect_err(&body);
             assert!(err.contains(wanted), "{body}: {err}");
         }
+        // The boundary values themselves are still fine.
+        let edge = format!(
+            r#"{{"protocol":1,"host":"h","capturedAt":{MAX_SAFE_INTEGER},"sessions":[{}]}}"#,
+            session.replace("\"created\":5", &format!("\"created\":{MAX_SAFE_INTEGER}"))
+        );
+        let snapshot = decode_payload(edge.as_bytes()).unwrap();
+        assert_eq!(snapshot.captured_at, MAX_SAFE_INTEGER);
+        assert_eq!(snapshot.sessions[0].created, MAX_SAFE_INTEGER);
+        let full = with(
+            "1",
+            "h",
+            &(0..MAX_SESSIONS)
+                .map(|i| session.replace("$3", &format!("${i}")))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        assert_eq!(
+            decode_payload(full.as_bytes()).unwrap().sessions.len(),
+            MAX_SESSIONS
+        );
     }
 
     #[test]
