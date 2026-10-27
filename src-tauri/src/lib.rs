@@ -1,3 +1,4 @@
+pub mod glass;
 pub mod popover;
 pub mod process;
 pub mod settings;
@@ -255,8 +256,15 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
             .minimizable(false)
             .center()
             .focused(true)
+            .transparent(true)
             .build()
             .map(|window| {
+                let glass_window = window.clone();
+                if let Err(e) = window.run_on_main_thread(move || {
+                    let _ = glass::apply_settings_material(&glass_window);
+                }) {
+                    eprintln!("cwelux: could not schedule settings glass: {e}");
+                }
                 let app = app.clone();
                 window.on_window_event(move |event| {
                     if matches!(event, WindowEvent::Destroyed) {
@@ -427,6 +435,8 @@ pub fn run() {
             let window = app
                 .get_webview_window(WINDOW)
                 .ok_or("popover window missing from tauri.conf.json")?;
+            // A failure is already logged and signalled to the UI.
+            let _ = glass::apply_popover_material(&window);
             let events_window = window.clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(false) => {
