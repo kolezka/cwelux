@@ -321,11 +321,13 @@ code, pre, .mono { font-family: var(--mono); }
 .toggle input:disabled + .switch { opacity: 0.5; }
 .toggle:has(input:disabled) { cursor: default; }
 
-/* Segmented control: hidden radios carry the value, their labels are the pills. */
+/* Segmented control: hidden radios carry the value, their labels are the pills.
+   The legend sits above the strip, so the top margin reserves its line plus the field gap. */
 .seg {
-  position: relative; display: flex; gap: 2px; margin: 0; padding: 3px; border: 0; min-width: 0; border-radius: 999px;
+  position: relative; display: flex; gap: 2px; margin: calc(1.45em + 6px) 0 0; padding: 3px; border: 0; min-width: 0; border-radius: 999px;
   background: var(--track); box-shadow: inset 0 1px 0 var(--glass-line), inset 0 0 0 1px var(--control-line);
 }
+.seg legend { position: absolute; bottom: 100%; left: 0; margin: 0 0 6px; padding: 0; font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--fg); }
 .seg label { flex: 1; text-align: center; padding: 6px 10px; border-radius: 999px; color: var(--muted); font-size: 12px; font-weight: 500; cursor: pointer; }
 .seg input:checked + label { background: var(--raised); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,0.12), inset 0 1px 0 var(--glass-line); }
 .seg input:focus-visible + label { box-shadow: 0 0 0 2px var(--accent); }

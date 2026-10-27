@@ -20,9 +20,9 @@ if (!isTauri()) {
       console.error("Ignoring malformed preferences-changed event:", error);
     }
   }).catch((error) => console.error("Could not listen for preferences-changed:", error));
-  // The native side sends this when the blur material failed; CSS then paints a solid tint.
-  void listen("glass-unavailable", () => {
-    document.documentElement.dataset.glass = "off";
-  }).catch((error) => console.error("Could not listen for glass-unavailable:", error));
+  // True when the native blur material failed; CSS then paints a solid tint.
+  void invoke<boolean>("glass_unavailable").then((off) => {
+    if (off) document.documentElement.dataset.glass = "off";
+  }).catch((error) => console.error("Could not read glass state:", error));
   void app.start();
 }
