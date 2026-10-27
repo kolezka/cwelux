@@ -6,7 +6,7 @@ pub mod terminal;
 pub mod tmux;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
@@ -249,69 +249,69 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
             window.set_focus().map_err(|e| e.to_string())
         },
         || {
-            let state = app.state::<PopoverState>();
-            let _opening = state.settings_opening.begin();
-            // The popover floats above normal windows; drop that so it cannot cover settings.
-            set_popover_floating(app, false);
-            // Shared by the page-load hook and the backstop task; a reload must not stack a
-            // second effect view.
-            let glass_applied = Arc::new(AtomicBool::new(false));
-            let page_glass = glass_applied.clone();
-            WebviewWindowBuilder::new(
-                app,
-                SETTINGS_WINDOW,
-                WebviewUrl::App("settings.html".into()),
-            )
-            .title("Cwelux Settings")
-            .inner_size(440.0, 520.0)
-            .resizable(false)
-            .maximizable(false)
-            .minimizable(false)
-            .center()
-            .focused(true)
-            .transparent(true)
-            // Runs on the main thread when the page commits, before it can ask for the state.
-            .on_page_load(move |window, payload| {
-                if matches!(payload.event(), PageLoadEvent::Started) {
-                    apply_settings_glass_once(&window, &page_glass);
-                }
+            // Both callers run on the async runtime, never the main thread, so waiting
+            // here cannot block the task it waits for.
+            let (sender, receiver) = mpsc::channel();
+            let main_app = app.clone();
+            app.run_on_main_thread(move || {
+                let _ = sender.send(build_settings(&main_app));
             })
-            .build()
-            .map(|window| {
-                // Tauri skips the hook if the page commits before the window is registered.
-                let glass_window = window.clone();
-                if let Err(e) = window.run_on_main_thread(move || {
-                    apply_settings_glass_once(&glass_window, &glass_applied);
-                }) {
-                    eprintln!("cwelux: could not schedule settings glass: {e}");
-                    app.state::<GlassState>().mark_failed(SETTINGS_WINDOW);
-                }
-                let app = app.clone();
-                window.on_window_event(move |event| {
-                    if matches!(event, WindowEvent::Destroyed) {
-                        // Runs after the window is unregistered, so the guard sees it closed.
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            set_popover_floating(&app, true);
-                            hide_if_unfocused(&app);
-                        });
-                    }
-                });
-            })
-            .map_err(|e| {
-                set_popover_floating(app, true);
-                format!("Could not open settings: {e}")
-            })
+            .map_err(|e| format!("Could not open settings: {e}"))?;
+            popover::settings_build_result(receiver.recv())
         },
     )
     .map(drop)
 }
 
-fn apply_settings_glass_once(window: &WebviewWindow, applied: &AtomicBool) {
-    if !applied.swap(true, Ordering::SeqCst) {
-        // A failure is already logged and recorded for the page.
-        let _ = glass::apply_settings_material(window);
-    }
+/// Must run on the main thread: Tauri then registers the window before the page can
+/// commit, so the page-load hook always finds it and applies the glass first.
+fn build_settings(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<PopoverState>();
+    let _opening = state.settings_opening.begin();
+    // The popover floats above normal windows; drop that so it cannot cover settings.
+    set_popover_floating(app, false);
+    // A reload fires the hook again and must not stack a second effect view.
+    let glass_applied = AtomicBool::new(false);
+    WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW,
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Cwelux Settings")
+    .inner_size(440.0, 520.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .transparent(true)
+    // Runs on the main thread when the page commits, before it can ask for the state.
+    .on_page_load(move |window, payload| {
+        if matches!(payload.event(), PageLoadEvent::Started)
+            && !glass_applied.swap(true, Ordering::SeqCst)
+        {
+            // A failure is already logged and recorded for the page.
+            let _ = glass::apply_settings_material(&window);
+        }
+    })
+    .build()
+    .map(|window| {
+        let app = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Destroyed) {
+                // Runs after the window is unregistered, so the guard sees it closed.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    set_popover_floating(&app, true);
+                    hide_if_unfocused(&app);
+                });
+            }
+        });
+    })
+    .map_err(|e| {
+        set_popover_floating(app, true);
+        format!("Could not open settings: {e}")
+    })
 }
 
 fn set_popover_floating(app: &AppHandle, floating: bool) {

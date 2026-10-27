@@ -83,6 +83,13 @@ pub fn open_or_focus<W>(
     }
 }
 
+/// The outcome the main-thread build sent back. A closed channel means the task never ran.
+pub fn settings_build_result(
+    received: Result<Result<(), String>, std::sync::mpsc::RecvError>,
+) -> Result<(), String> {
+    received.unwrap_or_else(|_| Err("settings window build did not report".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +244,27 @@ mod tests {
         };
         let (_, y) = popover_origin(icon, 420.0, 620.0, screen);
         assert_eq!(y, 25.0);
+    }
+
+    #[test]
+    fn a_settings_build_that_never_reports_is_an_error() {
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<(), String>>();
+        drop(sender);
+        assert_eq!(
+            settings_build_result(receiver.recv()),
+            Err("settings window build did not report".into())
+        );
+    }
+
+    #[test]
+    fn a_reported_settings_build_result_passes_through() {
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<(), String>>();
+        sender.send(Ok(())).unwrap();
+        assert_eq!(settings_build_result(receiver.recv()), Ok(()));
+        sender.send(Err("no window".into())).unwrap();
+        assert_eq!(
+            settings_build_result(receiver.recv()),
+            Err("no window".into())
+        );
     }
 }
