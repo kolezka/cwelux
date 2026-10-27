@@ -5,11 +5,13 @@ pub mod settings;
 pub mod terminal;
 pub mod tmux;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Position, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -251,6 +253,10 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
             let _opening = state.settings_opening.begin();
             // The popover floats above normal windows; drop that so it cannot cover settings.
             set_popover_floating(app, false);
+            // Shared by the page-load hook and the backstop task; a reload must not stack a
+            // second effect view.
+            let glass_applied = Arc::new(AtomicBool::new(false));
+            let page_glass = glass_applied.clone();
             WebviewWindowBuilder::new(
                 app,
                 SETTINGS_WINDOW,
@@ -264,13 +270,21 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
             .center()
             .focused(true)
             .transparent(true)
+            // Runs on the main thread when the page commits, before it can ask for the state.
+            .on_page_load(move |window, payload| {
+                if matches!(payload.event(), PageLoadEvent::Started) {
+                    apply_settings_glass_once(&window, &page_glass);
+                }
+            })
             .build()
             .map(|window| {
+                // Tauri skips the hook if the page commits before the window is registered.
                 let glass_window = window.clone();
                 if let Err(e) = window.run_on_main_thread(move || {
-                    let _ = glass::apply_settings_material(&glass_window);
+                    apply_settings_glass_once(&glass_window, &glass_applied);
                 }) {
                     eprintln!("cwelux: could not schedule settings glass: {e}");
+                    app.state::<GlassState>().mark_failed(SETTINGS_WINDOW);
                 }
                 let app = app.clone();
                 window.on_window_event(move |event| {
@@ -291,6 +305,13 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
         },
     )
     .map(drop)
+}
+
+fn apply_settings_glass_once(window: &WebviewWindow, applied: &AtomicBool) {
+    if !applied.swap(true, Ordering::SeqCst) {
+        // A failure is already logged and recorded for the page.
+        let _ = glass::apply_settings_material(window);
+    }
 }
 
 fn set_popover_floating(app: &AppHandle, floating: bool) {

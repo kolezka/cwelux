@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
+use window_vibrancy::NSVisualEffectMaterial;
 
 use crate::settings::Theme;
 
@@ -18,6 +19,13 @@ impl GlassState {
             .insert(label.to_owned());
     }
 
+    pub fn clear(&self, label: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(label);
+    }
+
     pub fn is_failed(&self, label: &str) -> bool {
         self.0
             .lock()
@@ -26,37 +34,17 @@ impl GlassState {
     }
 }
 
-/// Message logged and used to decide the CSS fallback. Pure so it is testable.
+/// The log line for a failed material. Pure so it is testable.
 pub fn material_failure_message(window: &str, error: &str) -> String {
     format!("cwelux: glass material unavailable for {window} window: {error}")
 }
 
-#[cfg(target_os = "macos")]
 pub fn apply_popover_material(window: &WebviewWindow) -> Result<(), String> {
-    apply_material(
-        window,
-        "popover",
-        window_vibrancy::NSVisualEffectMaterial::Popover,
-    )
+    apply_material(window, "popover", NSVisualEffectMaterial::Popover)
 }
 
-#[cfg(target_os = "macos")]
 pub fn apply_settings_material(window: &WebviewWindow) -> Result<(), String> {
-    apply_material(
-        window,
-        "settings",
-        window_vibrancy::NSVisualEffectMaterial::Sidebar,
-    )
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn apply_popover_material(_window: &WebviewWindow) -> Result<(), String> {
-    Err("unsupported platform".into())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn apply_settings_material(_window: &WebviewWindow) -> Result<(), String> {
-    Err("unsupported platform".into())
+    apply_material(window, "settings", NSVisualEffectMaterial::Sidebar)
 }
 
 /// `None` lets the material follow the system appearance.
@@ -81,28 +69,35 @@ pub fn sync_theme(app: &AppHandle, theme: Theme) {
     }
 }
 
-/// Must run on the main thread; window-vibrancy refuses otherwise.
-#[cfg(target_os = "macos")]
+/// Records the outcome per window, so a retry that succeeds reports the glass as available.
 fn apply_material(
     window: &WebviewWindow,
     name: &str,
-    material: window_vibrancy::NSVisualEffectMaterial,
+    material: NSVisualEffectMaterial,
 ) -> Result<(), String> {
+    let state = window.app_handle().state::<GlassState>();
+    state.clear(window.label());
+    vibrancy(window, material).inspect_err(|error| {
+        eprintln!("{}", material_failure_message(name, error));
+        state.mark_failed(window.label());
+    })
+}
+
+/// Must run on the main thread; window-vibrancy refuses otherwise.
+#[cfg(target_os = "macos")]
+fn vibrancy(window: &WebviewWindow, material: NSVisualEffectMaterial) -> Result<(), String> {
     window_vibrancy::apply_vibrancy(
         window,
         material,
         Some(window_vibrancy::NSVisualEffectState::Active),
         Some(22.0),
     )
-    .map_err(|e| {
-        let error = e.to_string();
-        eprintln!("{}", material_failure_message(name, &error));
-        window
-            .app_handle()
-            .state::<GlassState>()
-            .mark_failed(window.label());
-        error
-    })
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn vibrancy(_window: &WebviewWindow, _material: NSVisualEffectMaterial) -> Result<(), String> {
+    Err("unsupported platform".into())
 }
 
 #[cfg(test)]
@@ -124,6 +119,16 @@ mod tests {
         assert!(state.is_failed("settings"));
         assert!(!state.is_failed("main"));
         assert!(!state.is_failed("unknown"));
+    }
+
+    #[test]
+    fn clearing_a_window_forgets_only_its_failure() {
+        let state = GlassState::default();
+        state.mark_failed("settings");
+        state.mark_failed("main");
+        state.clear("settings");
+        assert!(!state.is_failed("settings"));
+        assert!(state.is_failed("main"));
     }
 
     #[test]
