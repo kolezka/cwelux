@@ -8,6 +8,7 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-get-preferences",
+    "allow-glass-unavailable",
     "allow-save-preferences",
     "allow-choose-directory",
     "allow-get-launch-at-login",

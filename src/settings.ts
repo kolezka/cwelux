@@ -33,14 +33,26 @@ export function createSettingsApp({ root, bridge }: SettingsOptions): SettingsHa
   let loginBusy = false;
   let loginKnown = false;
 
-  const loginBox = el("input", { id: "launch-at-login", type: "checkbox", disabled: true });
+  const loginBox = el("input", { id: "launch-at-login", type: "checkbox", role: "switch", disabled: true });
   const loginError = el("p", { class: "error", id: "login-error", role: "alert" });
   const directory = el("input", { id: "default-directory", autocomplete: "off", spellcheck: "false", disabled: true });
   const choose = el("button", { class: "quiet", id: "choose-directory", type: "button", text: "Choose…", disabled: true });
-  const interval = el("select", { id: "refresh-interval", disabled: true },
-    ...REFRESH_INTERVALS.map((s) => el("option", { value: String(s), text: `Every ${s} seconds` })));
-  const theme = el("select", { id: "theme", disabled: true },
-    ...THEMES.map((t) => el("option", { value: t, text: THEME_LABELS[t] })));
+  const segmented = <T extends string>(name: string, label: string, options: readonly T[], labels: Record<T, string>) => {
+    const inputs = options.map((value) =>
+      el("input", { id: `${name}-${value}`, type: "radio", name, value, disabled: true }));
+    return {
+      fieldset: el("fieldset", { id: name, class: "seg", role: "radiogroup", "aria-label": label },
+        el("legend", { text: label }),
+        ...options.flatMap((value, index) => [inputs[index], el("label", { for: `${name}-${value}`, text: labels[value] })])),
+      inputs,
+    };
+  };
+  const interval = segmented("refresh-interval", "Refresh interval", REFRESH_INTERVALS.map(String), {
+    "2": "2 s",
+    "4": "4 s",
+    "10": "10 s",
+  });
+  const theme = segmented("theme", "Theme", THEMES, THEME_LABELS);
   const save = el("button", { class: "primary", id: "save-settings", type: "submit", text: "Save", disabled: true });
   const formError = el("p", { class: "error", id: "settings-error", role: "alert" });
   const notice = el("p", { class: "notice", id: "settings-notice", role: "status", "aria-live": "polite" });
@@ -48,21 +60,25 @@ export function createSettingsApp({ root, bridge }: SettingsOptions): SettingsHa
     el("label", { class: "field" }, "Default starting directory",
       el("div", { class: "field-row" }, directory, choose)),
     el("p", { class: "hint", text: "Used for new sessions. ~ is your home folder." }),
-    el("label", { class: "field" }, "Refresh interval", interval),
-    el("label", { class: "field" }, "Theme", theme),
+    el("div", { class: "field" }, interval.fieldset),
+    el("div", { class: "field" }, theme.fieldset),
     el("div", { class: "actions" }, save),
     formError, notice);
 
   const view = el("section", { class: "settings", "data-view": "settings" },
     el("header", { class: "bar" }, el("div", { class: "bar-left" }, el("h2", { text: "Settings" }))),
     el("div", { class: "body" },
-      el("label", { class: "toggle" }, loginBox, el("span", { text: "Launch at login" })),
-      el("p", { class: "hint", id: "login-hint", text: "Applies immediately. Not part of Save." }),
+      el("label", { class: "toggle" },
+        el("span", { class: "toggle-copy" },
+          el("strong", { text: "Launch at login" }),
+          el("small", { class: "hint", id: "login-hint", text: "Applies immediately. Not part of Save." })),
+        loginBox,
+        el("span", { class: "switch", "aria-hidden": "true" })),
       loginError,
       form));
 
   function renderControls() {
-    for (const control of [directory, choose, interval, theme]) control.disabled = !loaded || saving;
+    for (const control of [directory, choose, ...interval.inputs, ...theme.inputs]) control.disabled = !loaded || saving;
     save.disabled = !loaded || saving;
     save.textContent = saving ? "Saving…" : "Save";
     loginBox.disabled = !loginKnown || loginBusy;
@@ -70,8 +86,12 @@ export function createSettingsApp({ root, bridge }: SettingsOptions): SettingsHa
 
   function fill(prefs: Preferences) {
     directory.value = prefs.defaultDirectory;
-    interval.value = String(prefs.refreshIntervalSeconds);
-    theme.value = prefs.theme;
+    interval.inputs.find((input) => input.value === String(prefs.refreshIntervalSeconds))!.checked = true;
+    theme.inputs.find((input) => input.value === prefs.theme)!.checked = true;
+  }
+
+  function selected(inputs: HTMLInputElement[]) {
+    return inputs.find((input) => input.checked)!;
   }
 
   function showLogin(enabled: boolean | null) {
@@ -112,8 +132,8 @@ export function createSettingsApp({ root, bridge }: SettingsOptions): SettingsHa
     if (problem) return;
     const wanted: Preferences = {
       defaultDirectory: dir,
-      refreshIntervalSeconds: Number(interval.value) as RefreshInterval,
-      theme: theme.value as Theme,
+      refreshIntervalSeconds: Number(selected(interval.inputs).value) as RefreshInterval,
+      theme: selected(theme.inputs).value as Theme,
     };
     saving = true;
     renderControls();

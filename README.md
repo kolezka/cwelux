@@ -4,6 +4,11 @@ Manage local tmux sessions from the macOS menu bar. Built with **Tauri 2, Rust, 
 
 Cwelux handles the routine commands while your terminal stays available for interactive work. Closing the popover does not stop your sessions.
 
+<p align="center">
+  <img src="docs/screenshots/popover-dark.png" width="340" alt="The Cwelux popover in dark mode: a glass pane under the menu bar listing two tmux sessions, a search field and a New session button">
+  <img src="docs/screenshots/settings-dark.png" width="352" alt="The Cwelux Settings window in dark mode: a Launch at login switch, a default directory field, and segmented controls for refresh interval and theme">
+</p>
+
 ## Features
 
 - **Find sessions:** search by name and see window counts and attached clients.
@@ -12,6 +17,7 @@ Cwelux handles the routine commands while your terminal stays available for inte
 - **Manage sessions:** create a detached session, rename it, or end it after confirmation.
 - **Return to the terminal:** open a session in the default terminal handler or copy its attach command.
 - **Settings:** a separate window, opened from the tray menu or the popover footer.
+- **Native look:** both windows are translucent glass over the desktop. With Reduce transparency enabled in System Settings they fall back to a solid background.
 
 Ending a session stops all processes in its panes. Cwelux asks for confirmation first.
 
@@ -25,6 +31,8 @@ Open Settings from the tray icon's right-click menu or the **Settings** button a
 | Default starting directory | Any existing folder, with a folder picker | Home folder (`~`) |
 | Refresh interval | 2, 4 or 10 seconds | 4 seconds |
 | Theme | Match system, light or dark | Match system |
+
+Refresh interval and Theme are segmented controls. Launch at login is a switch.
 
 Preferences are saved to `preferences.json` in the app's config folder and survive restarts. Refresh interval and theme apply to the running app straight away. Launch at login applies as soon as you toggle it and is not part of **Save**.
 

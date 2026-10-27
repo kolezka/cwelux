@@ -72,6 +72,13 @@ const setValue = (selector: string, value: string) => {
   input.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event);
   input.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
 };
+const check = (name: string, value: string) => {
+  const input = $<HTMLInputElement>(`#${name}-${value}`);
+  input.checked = true;
+  input.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
+};
+const checked = (name: string) =>
+  root.querySelector<HTMLInputElement>(`#${name} input[type=radio]:checked`)?.value;
 const toggleLogin = () => {
   const box = $<HTMLInputElement>("#launch-at-login");
   box.checked = !box.checked;
@@ -103,18 +110,20 @@ describe("loading", () => {
     bridge.loginEnabled = true;
     await mount();
     expect($<HTMLInputElement>("#default-directory").value).toBe("~/code");
-    expect($<HTMLSelectElement>("#refresh-interval").value).toBe("10");
-    expect($<HTMLSelectElement>("#theme").value).toBe("dark");
+    expect(checked("refresh-interval")).toBe("10");
+    expect(checked("theme")).toBe("dark");
     expect($<HTMLInputElement>("#launch-at-login").checked).toBe(true);
     expect(theme()).toBe("dark");
     expect($("#login-hint").textContent).toMatch(/applies immediately/i);
   });
 
-  test("offers exactly the approved intervals and themes", async () => {
+  test("segmented groups expose exactly the allowed values as radios", async () => {
     await mount();
-    const values = (sel: string) => [...root.querySelectorAll<HTMLOptionElement>(`${sel} option`)].map((o) => o.value);
-    expect(values("#refresh-interval")).toEqual(["2", "4", "10"]);
-    expect(values("#theme")).toEqual(["system", "light", "dark"]);
+    const values = (name: string) => [...root.querySelectorAll<HTMLInputElement>(`#${name} input[type=radio]`)].map((i) => i.value);
+    expect(values("refresh-interval")).toEqual(["2", "4", "10"]);
+    expect(values("theme")).toEqual(["system", "light", "dark"]);
+    expect($("#refresh-interval").getAttribute("role")).toBe("radiogroup");
+    expect($("#launch-at-login").getAttribute("role")).toBe("switch");
   });
 
   test("opening settings never changes the login item", async () => {
@@ -157,8 +166,8 @@ describe("saving", () => {
   test("saves exactly the three preferences and applies the theme", async () => {
     await mount();
     setValue("#default-directory", "  /tmp/work ");
-    setValue("#refresh-interval", "2");
-    setValue("#theme", "light");
+    check("refresh-interval", "2");
+    check("theme", "light");
     expect(theme()).toBe("dark");
     submit();
     await flush();
@@ -170,18 +179,30 @@ describe("saving", () => {
     expect($("#settings-error").textContent).toBe("");
   });
 
+  test("saving sends the checked radio values", async () => {
+    await mount();
+    check("refresh-interval", "2");
+    check("theme", "light");
+    submit();
+    await flush();
+    expect(bridge.calls.at(-1)).toEqual({
+      method: "savePreferences",
+      args: [{ defaultDirectory: "~/code", refreshIntervalSeconds: 2, theme: "light" }],
+    });
+  });
+
   test("a save error keeps the form and the previous theme", async () => {
     await mount();
     bridge.handlers.savePreferences = async () => {
       throw "Not a directory: /etc/hosts";
     };
     setValue("#default-directory", "/etc/hosts");
-    setValue("#theme", "light");
+    check("theme", "light");
     submit();
     await flush();
     expect($("#settings-error").textContent).toContain("Could not save settings: Not a directory: /etc/hosts");
     expect($<HTMLInputElement>("#default-directory").value).toBe("/etc/hosts");
-    expect($<HTMLSelectElement>("#theme").value).toBe("light");
+    expect(checked("theme")).toBe("light");
     expect(theme()).toBe("dark");
     expect($("#settings-notice").textContent).toBe("");
     expect(bridge.stored).toEqual({ defaultDirectory: "~/code", refreshIntervalSeconds: 10, theme: "dark" });
