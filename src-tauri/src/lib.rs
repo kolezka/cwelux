@@ -1,14 +1,17 @@
+pub mod glass;
 pub mod popover;
 pub mod process;
 pub mod settings;
 pub mod terminal;
 pub mod tmux;
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Position, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -16,6 +19,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::DialogExt as _;
 
+use glass::GlassState;
 use popover::{HideReason, SettingsOpening};
 use settings::{LoginItem, Preferences, PreferencesStore};
 use terminal::Launcher;
@@ -170,11 +174,17 @@ async fn save_preferences(
     preferences: Preferences,
 ) -> Result<Preferences, String> {
     let saved = store.save(&preferences)?;
+    glass::sync_theme(&app, saved.theme);
     // The file is already written, so a failed broadcast must not look like a failed save.
     if let Err(e) = app.emit(PREFERENCES_EVENT, &saved) {
         eprintln!("cwelux: could not broadcast new preferences: {e}");
     }
     Ok(saved)
+}
+
+#[tauri::command]
+fn glass_unavailable(window: tauri::Window, state: State<'_, GlassState>) -> bool {
+    state.is_failed(window.label())
 }
 
 // Async so window creation does not block the main thread it needs.
@@ -239,43 +249,69 @@ fn show_settings(app: &AppHandle) -> Result<(), String> {
             window.set_focus().map_err(|e| e.to_string())
         },
         || {
-            let state = app.state::<PopoverState>();
-            let _opening = state.settings_opening.begin();
-            // The popover floats above normal windows; drop that so it cannot cover settings.
-            set_popover_floating(app, false);
-            WebviewWindowBuilder::new(
-                app,
-                SETTINGS_WINDOW,
-                WebviewUrl::App("settings.html".into()),
-            )
-            .title("Cwelux Settings")
-            .inner_size(440.0, 520.0)
-            .resizable(false)
-            .maximizable(false)
-            .minimizable(false)
-            .center()
-            .focused(true)
-            .build()
-            .map(|window| {
-                let app = app.clone();
-                window.on_window_event(move |event| {
-                    if matches!(event, WindowEvent::Destroyed) {
-                        // Runs after the window is unregistered, so the guard sees it closed.
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            set_popover_floating(&app, true);
-                            hide_if_unfocused(&app);
-                        });
-                    }
-                });
+            // Both callers run on the async runtime, never the main thread, so waiting
+            // here cannot block the task it waits for.
+            let (sender, receiver) = mpsc::channel();
+            let main_app = app.clone();
+            app.run_on_main_thread(move || {
+                let _ = sender.send(build_settings(&main_app));
             })
-            .map_err(|e| {
-                set_popover_floating(app, true);
-                format!("Could not open settings: {e}")
-            })
+            .map_err(|e| format!("Could not open settings: {e}"))?;
+            popover::settings_build_result(receiver.recv())
         },
     )
     .map(drop)
+}
+
+/// Must run on the main thread: Tauri then registers the window before the page can
+/// commit, so the page-load hook always finds it and applies the glass first.
+fn build_settings(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<PopoverState>();
+    let _opening = state.settings_opening.begin();
+    // The popover floats above normal windows; drop that so it cannot cover settings.
+    set_popover_floating(app, false);
+    // A reload fires the hook again and must not stack a second effect view.
+    let glass_applied = AtomicBool::new(false);
+    WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW,
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Cwelux Settings")
+    .inner_size(440.0, 520.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .transparent(true)
+    // Runs on the main thread when the page commits, before it can ask for the state.
+    .on_page_load(move |window, payload| {
+        if matches!(payload.event(), PageLoadEvent::Started)
+            && !glass_applied.swap(true, Ordering::SeqCst)
+        {
+            // A failure is already logged and recorded for the page.
+            let _ = glass::apply_settings_material(&window);
+        }
+    })
+    .build()
+    .map(|window| {
+        let app = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Destroyed) {
+                // Runs after the window is unregistered, so the guard sees it closed.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    set_popover_floating(&app, true);
+                    hide_if_unfocused(&app);
+                });
+            }
+        });
+    })
+    .map_err(|e| {
+        set_popover_floating(app, true);
+        format!("Could not open settings: {e}")
+    })
 }
 
 fn set_popover_floating(app: &AppHandle, floating: bool) {
@@ -395,6 +431,7 @@ pub fn run() {
         .manage(backend)
         .manage(PopoverState::default())
         .manage(LoginItemLock::default())
+        .manage(GlassState::default())
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             session_details,
@@ -410,7 +447,8 @@ pub fn run() {
             open_settings,
             choose_directory,
             get_launch_at_login,
-            set_launch_at_login
+            set_launch_at_login,
+            glass_unavailable
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
@@ -423,10 +461,16 @@ pub fn run() {
                 eprintln!("cwelux: settings location unavailable: {e}");
             }
             app.manage(PreferencesStore::new(path, home));
+            // A load error is already shown by the UI, so the theme just stays on system.
+            if let Ok(prefs) = app.state::<PreferencesStore>().load() {
+                glass::sync_theme(app.handle(), prefs.theme);
+            }
 
             let window = app
                 .get_webview_window(WINDOW)
                 .ok_or("popover window missing from tauri.conf.json")?;
+            // A failure is already logged and signalled to the UI.
+            let _ = glass::apply_popover_material(&window);
             let events_window = window.clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(false) => {
