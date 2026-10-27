@@ -38,6 +38,11 @@ if (!isTauri()) {
     }
   }).catch((error) => console.error("Could not listen for preferences-changed:", error));
 
+  // The native side sends this when the blur material failed; CSS then paints a solid tint.
+  void listen("glass-unavailable", () => {
+    document.documentElement.dataset.glass = "off";
+  }).catch((error) => console.error("Could not listen for glass-unavailable:", error));
+
   document.addEventListener("visibilitychange", () => activity.setPageVisible(document.visibilityState === "visible"));
   window.addEventListener("focus", () => activity.setFocused(true));
   window.addEventListener("blur", () => activity.setFocused(false));
